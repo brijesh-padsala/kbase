@@ -76,4 +76,10 @@ bin/kbase-init        # the scaffolder (mode detection, evidence pack, brief gen
 template/             # everything that gets copied into target repos
 ```
 
+## License
+
+MIT — see [LICENSE](LICENSE). Scaffolded repos own their copies outright; no attribution
+beyond the license is required in projects initialized with kbase.
+
+
 Test it on a scratch repo before real use: `bin/kbase-init /tmp/scratch`.
