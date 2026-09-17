@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+"""kbase-init — scaffold an agent-agnostic knowledge base into a git repo.
+
+Creates knowledge/ (structure + policy templates), scripts/ (ksearch +
+knowledge-gate), and a root AGENTS.md router. Two bootstrap modes:
+
+  existing    repo has real code + history → KB status SCAFFOLDED and a
+              knowledge/_bootstrap-brief.md is generated: a mechanical
+              evidence pack + distillation checklist for the first agent
+              session (the repo itself tells any agent what to do).
+  greenfield  young/empty repo → KB status VERIFIED at the init commit;
+              the write-back policy grows it from there.
+
+Usage:
+  kbase-init [--mode auto|existing|greenfield] [--force] [TARGET_DIR]   # default .
+
+Python 3.10+, standard library only.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+
+TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "template"
+
+# ---------------------------------------------------------------------------
+# mode detection + evidence pack constants
+
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "env", "__pycache__",
+    "dist", "build", "target", ".tox", ".mypy_cache", ".pytest_cache", ".next",
+    ".turbo", "coverage", ".idea", ".vscode", "site-packages", ".gradle", "vendor",
+}
+EXT_LANG = {
+    ".py": "Python", ".rs": "Rust", ".ts": "TypeScript", ".tsx": "TypeScript",
+    ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+    ".go": "Go", ".java": "Java", ".kt": "Kotlin", ".rb": "Ruby", ".php": "PHP",
+    ".cs": "C#", ".c": "C", ".h": "C", ".cpp": "C++", ".cc": "C++", ".hpp": "C++",
+    ".swift": "Swift",
+}
+KNOWN_PY = {
+    "fastapi": "FastAPI", "django": "Django", "flask": "Flask", "celery": "Celery",
+    "sqlalchemy": "SQLAlchemy", "pydantic": "Pydantic", "pytest": "pytest",
+    "uvicorn": "Uvicorn", "gunicorn": "Gunicorn", "scrapy": "Scrapy", "numpy": "NumPy",
+    "pandas": "pandas", "torch": "PyTorch", "maturin": "maturin (Rust ext)",
+}
+KNOWN_JS = {
+    "next": "Next.js", "react": "React", "vue": "Vue", "svelte": "Svelte",
+    "express": "Express", "fastify": "Fastify", "nest": "NestJS", "typescript": "TypeScript",
+    "vite": "Vite", "webpack": "webpack", "jest": "Jest", "playwright": "Playwright",
+    "prisma": "Prisma", "tailwindcss": "Tailwind",
+}
+KNOWN_RS = {
+    "tokio": "Tokio", "axum": "Axum", "actix-web": "Actix Web", "serde": "Serde",
+    "sqlx": "sqlx", "pyo3": "PyO3", "clap": "clap", "warp": "warp", "rocket": "Rocket",
+}
+TEST_BASES = re.compile(r"(^test_|_test\.|\.spec\.|\.test\.|(^|/)conftest\.py$)")
+ENTRY_CANDIDATES = [
+    "main.py", "app.py", "manage.py", "src/main.py", "src/app.py",
+    "src/main.rs", "src/lib.rs", "cmd", "main.go", "index.ts", "src/index.ts",
+    "index.js", "server.js", "app.ts", "Program.cs",
+]
+
+
+def git(cwd, *args, check=True):
+    return subprocess.run(  # noqa: S603
+        ["git", *args],  # noqa: S607
+        cwd=cwd, capture_output=True, text=True, check=check,
+    ).stdout
+
+
+def walk_source(root: Path):
+    """(per-language {files, loc}, test_file_count, entry_points_found)."""
+    stats, tests, entries = {}, 0, []
+    for dirpath, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for n in names:
+            ext = os.path.splitext(n)[1].lower()
+            if ext in EXT_LANG:
+                s = stats.setdefault(EXT_LANG[ext], {"files": 0, "loc": 0})
+                s["files"] += 1
+                try:
+                    with open(os.path.join(dirpath, n), encoding="utf-8", errors="ignore") as fh:
+                        s["loc"] += sum(1 for _ in fh)
+                except OSError:
+                    pass
+            if ext in EXT_LANG and TEST_BASES.search(n.lower()):
+                tests += 1
+        rel = os.path.relpath(dirpath, root)
+        for cand in ENTRY_CANDIDATES:
+            if os.path.exists(os.path.join(dirpath, cand)) and cand in (
+                "main.py", "app.py", "manage.py", "src/main.rs", "src/lib.rs",
+                "main.go", "index.ts", "index.js", "server.js", "app.ts", "Program.cs",
+            ) and rel in (".", "src", "cmd"):
+                entries.append(os.path.normpath(os.path.join(rel, cand)))
+    return stats, tests, sorted(set(entries))
+
+
+def detect_stack(root: Path):
+    """Frameworks/services the manifests betray, as readable lines."""
+    found = []
+    pj = root / "package.json"
+    if pj.is_file():
+        try:
+            deps = set()
+            data = json.loads(pj.read_text(encoding="utf-8"))
+            for key in ("dependencies", "devDependencies"):
+                deps |= set(data.get(key, {}))
+            found += [KNOWN_JS[d] for d in deps if d in KNOWN_JS]
+            if data.get("name"):
+                found.append(f"npm package '{data['name']}'")
+        except (OSError, ValueError):
+            pass
+    py_deps = set()
+    req = list(root.glob("requirements*.txt")) + [root / "pyproject.toml"]
+    for f in req:
+        if f.is_file():
+            try:
+                for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    m = re.match(r"\s*([A-Za-z0-9_.\[\]-]+)\s*[=<>~\[]", line)
+                    if m:
+                        py_deps.add(m.group(1).lower().replace("_", "-"))
+            except OSError:
+                pass
+    found += [KNOWN_PY[d] for d in py_deps if d in KNOWN_PY]
+    cargo = root / "Cargo.toml"
+    if cargo.is_file():
+        try:
+            text = cargo.read_text(encoding="utf-8", errors="ignore")
+            found += [KNOWN_RS[d] for d in KNOWN_RS if re.search(rf'^\s*{d}\s*=', text, re.M)]
+            m = re.search(r'^\s*name\s*=\s*"([^"]+)"', text, re.M)
+            if m:
+                found.append(f"Rust crate '{m.group(1)}'")
+        except OSError:
+            pass
+    for f in ("go.mod", "Gemfile", "composer.json", "pom.xml", "build.gradle", "build.gradle.kts"):
+        if (root / f).is_file():
+            found.append(f"{f} present")
+    return sorted(dict.fromkeys(found))
+
+
+def compose_services(root: Path):
+    names = []
+    for f in sorted(root.glob("docker-compose*.y*ml")):
+        try:
+            in_services, indent = False, None
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^(\s*)([A-Za-z0-9_.-]+):\s*$", line)
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                if not in_services and re.match(r"^services:\s*$", line):
+                    in_services, indent = True, None
+                    continue
+                if in_services:
+                    if line and not line[0].isspace():
+                        in_services = False
+                        continue
+                    if m:
+                        cur = len(m.group(1))
+                        if indent is None:
+                            indent = cur
+                        if cur == indent:
+                            names.append(f"{m.group(2)} (from {f.name})")
+        except OSError:
+            pass
+    return sorted(dict.fromkeys(names))
+
+
+def git_themes(root: Path):
+    total = git(root, "rev-list", "--count", "HEAD").strip()
+    first = git(root, "log", "--reverse", "--format=%as").splitlines()[:1]
+    subjects = git(root, "log", "--format=%s", "-n", "200").splitlines()
+    types, scopes = Counter(), Counter()
+    for s in subjects:
+        m = re.match(r"^(\w+)(?:\(([^)]+)\))?!?:", s)
+        if m:
+            types[m.group(1).lower()] += 1
+            if m.group(2):
+                scopes[m.group(2).lower()] += 1
+    return {
+        "total": total,
+        "first_commit": first[0] if first else "?",
+        "type_counts": dict(types.most_common()),
+        "top_scopes": [s for s, _ in scopes.most_common(8)],
+        "recent": subjects[:5],
+    }
+
+
+def build_brief(project, baseline, date, root: Path, pre_stats):
+    stats, tests, entries = pre_stats
+    stack = detect_stack(root)
+    services = compose_services(root)
+    themes = git_themes(root)
+    workflows = sorted(p.name for p in (root / ".github" / "workflows").glob("*") if p.is_file()) \
+        if (root / ".github" / "workflows").is_dir() else []
+    migrations = len(list((root / "alembic" / "versions").glob("*.py"))) \
+        if (root / "alembic" / "versions").is_dir() else 0
+
+    lang_lines = "\n".join(
+        f"| {lang} | {v['files']} | {v['loc']:,} |" for lang, v in
+        sorted(stats.items(), key=lambda kv: -kv[1]["loc"])
+    ) or "| (none detected) | | |"
+    type_counts = ", ".join(f"{k}: {v}" for k, v in themes["type_counts"].items()) or "(no conventional-commit types)"
+    scopes = ", ".join(themes["top_scopes"]) or "(none)"
+    recent = "\n".join(f"  - {s}" for s in themes["recent"]) or "  - (none)"
+
+    return f"""# Bootstrap brief — distillation pass for {project}
+
+> Generated by kbase-init {date}. Baseline: `{baseline}`.
+> **KB status is SCAFFOLDED until this brief is completed** — nothing in knowledge/ may be
+> cited as truth yet. This file is the contract between kbase-init (which gathered the
+> mechanics) and you, the distillation agent (who verifies and writes).
+
+## Your job
+
+Turn the evidence pack below into a VERIFIED knowledge base. You are reading code and
+history, labeling every claim, and flipping the status line. Work from this checklist:
+
+1. **Verify the evidence pack** — it is mechanical and can be wrong. Confirm anything you
+   build on with the source (`rg`, or `ripwire --for` if installed). Fix wrong lines in
+   your head, not by trusting them.
+2. **Write `knowledge/docs/architecture.md`** — stack tiers, how components connect, data
+   flow, entry points. Every claim ✅ with file evidence (`path:line`) or ❓.
+3. **Write `knowledge/learning/pitfalls.md`** — from git themes below (what breaks
+   repeatedly?) and code reading. Same labels.
+4. **Write `knowledge/memory/operations.md`** — environments, endpoints, run steps that
+   are verifiable from configs. Never inline secrets; ❓ anything runtime you can't check.
+5. **Fill every `TODO(project)` and `TODO(distillation)` marker**: `rg -n 'TODO\\((project|distillation)\\)' knowledge/`
+   (quality-gates commands, boundaries tiers, hygiene audit cadence).
+6. **Add the first lessons** to `knowledge/learning/lessons-log.md` if history taught any.
+7. **Flip and delete, in ONE commit**: set the KB status line in `knowledge/README.md`
+   AND `knowledge/INDEX.md` to `VERIFIED @ <commit-you-verified-against> ({date})`,
+   delete this brief file, commit as `knowledge: distillation pass — KB VERIFIED`.
+   `scripts/knowledge-gate.py` verifies the named commit exists and that VERIFIED and
+   the brief never coexist.
+
+**Rules of engagement:** TL;DR-first on every file (ksearch ranks on it). Prefer deleting
+an unverifiable claim over guessing. Do not invent. Dated/incident material keeps its date.
+
+## Evidence pack (mechanical — verify before building on it)
+
+### Stack signals
+{chr(10).join(f"- {s}" for s in stack) or "- (no manifests detected)"}
+
+### Size and shape
+| Language | Files | LOC |
+|---|---|---|
+{lang_lines}
+
+- Test files detected: {tests}
+- Entry points found: {', '.join(entries) or '(none of the usual suspects)'}
+- Alembic migrations: {migrations}
+- CI workflows: {', '.join(workflows) or '(none detected)'}
+- Docker services:
+{chr(10).join(f"  - {s}" for s in services) or "  - (no compose files)"}
+
+### Git history ({themes['total']} commits since {themes['first_commit']})
+- Conventional-commit types (last 200): {type_counts}
+- Most-touched areas (scopes): {scopes}
+- Recent subjects:
+{recent}
+
+### What the history is hinting at
+Recurring `fix` types and hot scopes above are your pitfalls and lessons candidates —
+start there when writing `pitfalls.md`.
+"""
+
+
+def render(text: str, values: dict) -> str:
+    for key, val in values.items():
+        text = text.replace("{{" + key + "}}", val)
+    leftover = re.findall(r"\{\{[A-Z_]+\}\}", text)
+    if leftover:
+        raise SystemExit(f"kbase-init bug: unresolved placeholders {sorted(set(leftover))}")
+    return text
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="kbase-init")
+    ap.add_argument("target", nargs="?", default=".", help="repo to scaffold (default: cwd)")
+    ap.add_argument("--mode", choices=["auto", "existing", "greenfield"], default="auto")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing knowledge/")
+    a = ap.parse_args()
+
+    target = Path(a.target).resolve()
+    if not target.is_dir():
+        ap.error(f"{target} is not a directory")
+    try:
+        root = Path(git(target, "rev-parse", "--show-toplevel").strip())
+    except subprocess.CalledProcessError:
+        ap.error(f"{target} is not a git repo — git init and make the first commit first")
+    if subprocess.run(  # noqa: S603
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"],  # noqa: S607
+        capture_output=True,
+    ).returncode != 0:
+        ap.error("repo has no commits — make the first commit first (the KB needs a baseline)")
+
+    if (root / "knowledge").exists() and not a.force:
+        ap.error("knowledge/ already exists (use --force to overwrite template files)")
+
+    # --- mode detection
+    stats, _, _ = walk_source(root)
+    src_files = sum(v["files"] for v in stats.values())
+    commits = int(git_themes(root)["total"] or 0)
+    mode = a.mode
+    if mode == "auto":
+        mode = "existing" if src_files >= 25 and commits >= 15 else "greenfield"
+    # Evidence gathered BEFORE scaffolding so kbase's own scripts never
+    # contaminate the project stats.
+    pre_stats = walk_source(root)
+    print(f"[kbase] target   : {root}")
+    print(f"[kbase] mode     : {mode} (auto-detected from {src_files} source files, "
+          f"{commits} commits — override with --mode)")
+
+    # --- shared values
+    short = git(root, "rev-parse", "--short", "HEAD").strip()
+    full = git(root, "rev-parse", "HEAD").strip()
+    date = datetime.date.today().isoformat()
+    remote = git(root, "remote", "get-url", "origin", check=False).strip()
+    name = re.sub(r"\.git$", "", remote.rsplit("/", 1)[-1]) if remote else root.name
+    if mode == "existing":
+        status_line = (f"SCAFFOLDED @ {short} ({date}) — structure only; DO NOT cite as "
+                       f"truth until the distillation pass (knowledge/_bootstrap-brief.md) flips this")
+        arch_tldr = (f"Stub — SCAFFOLDED pending the distillation pass "
+                     f"(knowledge/_bootstrap-brief.md); do not cite yet.")
+    else:
+        status_line = (f"VERIFIED @ {short} ({date}) — baseline is the init commit; "
+                       f"the KB grows via the write-back policy")
+        arch_tldr = ("Fresh project — record tiers and decisions here as they land, "
+                     "every claim labeled ✅/❓.")
+    values = {
+        "PROJECT": name, "BASELINE_SHORT": short, "BASELINE_FULL": full,
+        "DATE": date, "STATUS_LINE": status_line, "ARCH_TLDR": arch_tldr,
+    }
+
+    # --- knowledge/ from template
+    copied = 0
+    for src in sorted((TEMPLATE_DIR / "knowledge").rglob("*")):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(TEMPLATE_DIR / "knowledge")
+        dst = root / "knowledge" / rel.parent
+        dst.mkdir(parents=True, exist_ok=True)
+        out = dst / (rel.stem if rel.suffix == ".tmpl" else rel.name)
+        if out.exists() and not a.force:
+            print(f"[kbase] skip (exists, no --force): knowledge/{out.relative_to(root / 'knowledge')}")
+            continue
+        text = src.read_text(encoding="utf-8")
+        out.write_text(render(text, values) if rel.suffix == ".tmpl" else text, encoding="utf-8")
+        copied += 1
+
+    # --- scripts/
+    (root / "scripts").mkdir(exist_ok=True)
+    for script in ("ksearch.py", "knowledge-gate.py"):
+        dst = root / "scripts" / script
+        if dst.exists() and not a.force:
+            print(f"[kbase] skip (exists, no --force): scripts/{script}")
+            continue
+        shutil.copy2(TEMPLATE_DIR / "scripts" / script, dst)
+        copied += 1
+
+    # --- root AGENTS.md
+    agents = root / "AGENTS.md"
+    block = render((TEMPLATE_DIR / "AGENTS.md.tmpl").read_text(encoding="utf-8"), values)
+    if agents.exists():
+        (root / "knowledge" / "_agents-router-block.md").write_text(block, encoding="utf-8")
+        print("[kbase] AGENTS.md exists — router block written to "
+              "knowledge/_agents-router-block.md; merge it into AGENTS.md manually")
+    else:
+        agents.write_text(block, encoding="utf-8")
+        copied += 1
+
+    # --- pre-commit wiring
+    pc = root / ".pre-commit-config.yaml"
+    snippet = (TEMPLATE_DIR / ".pre-commit-snippet.yaml").read_text(encoding="utf-8")
+    if pc.exists():
+        if "knowledge-gate" not in pc.read_text(encoding="utf-8"):
+            (root / ".pre-commit-knowledge-gate-snippet.yaml").write_text(snippet, encoding="utf-8")
+            print("[kbase] .pre-commit-config.yaml exists — merge "
+                  ".pre-commit-knowledge-gate-snippet.yaml into it")
+    else:
+        pc.write_text(snippet, encoding="utf-8")
+        print("[kbase] created .pre-commit-config.yaml with the knowledge-gate hook "
+              "(needs `pip install pre-commit && pre-commit install`)")
+
+    # --- bootstrap brief (existing mode only)
+    if mode == "existing":
+        (root / "knowledge" / "_bootstrap-brief.md").write_text(
+            build_brief(name, short, date, root, pre_stats), encoding="utf-8")
+        print(f"[kbase] wrote knowledge/_bootstrap-brief.md (evidence pack + checklist)")
+
+    # --- smoke test
+    env = dict(os.environ, KSEARCH_NO_LOG="1")
+    r = subprocess.run(  # noqa: S603
+        [sys.executable, str(root / "scripts" / "ksearch.py"), name, "--limit", "3"],
+        capture_output=True, text=True, env=env,
+    )
+    head = (r.stdout or r.stderr).splitlines()[:1]
+    print(f"[kbase] ksearch smoke: {' '.join(head) if head else '(no output)'} "
+          f"(exit {r.returncode}; 1 = no hits yet is fine on an empty KB)")
+
+    # --- next steps
+    if mode == "existing":
+        print(f"""
+[kbase] DONE — {copied} files. KB status: SCAFFOLDED (until distilled).
+NEXT STEP (the whole interface): open an agent session in this repo and say
+    "read AGENTS.md"
+The router's bootstrap rule sends it to knowledge/_bootstrap-brief.md; when the
+distillation completes it flips the status to VERIFIED and deletes the brief.
+Then: git add knowledge/ scripts/ AGENTS.md .pre-commit* && commit.""")
+    else:
+        print(f"""
+[kbase] DONE — {copied} files. KB status: VERIFIED @ {short} (init baseline).
+Greenfield: no distillation needed. Grow the KB via the write-back policy —
+knowledge commits ride with the code that taught them. Start by replacing the
+architecture.md stub TL;DR with the first real tier description.
+Then: git add knowledge/ scripts/ AGENTS.md .pre-commit* && commit.""")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

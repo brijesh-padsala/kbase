@@ -1,0 +1,26 @@
+# AGENTS.md
+
+**All working knowledge for this repo lives in [`knowledge/`](knowledge/INDEX.md) — read [knowledge/INDEX.md](knowledge/INDEX.md) FIRST and check its KB status line.**
+
+- If the status is **SCAFFOLDED**: the knowledge base is structure-only. Complete `knowledge/_bootstrap-brief.md` (distillation pass) before citing anything in `knowledge/` as truth.
+- If the status is **VERIFIED @ &lt;commit&gt;**: cite freely; recheck runtime claims against the environment before operational work.
+
+## Search, don't read
+
+Route by question type BEFORE reaching for Grep/Read:
+
+| Question about | Tool |
+|---|---|
+| Knowledge/rules/architecture (`knowledge/` content) | `python3 scripts/ksearch.py "<query>"` — ranked excerpts + file pointers; read the TL;DR before the full file |
+| Code: who-calls-what, blast radius, where to start | `ripwire <source-dir> --for="<task>"` / `--callers=<SYM>` / `--impact=<SYM>` (if installed) — signatures-not-bodies; else targeted `rg` + read |
+| String literals, configs, non-code files | `rg` |
+
+## Write-back policy — knowledge goes HERE, never to your native memory
+
+1. **Default is DON'T write.** Record only what a future session would otherwise re-derive painfully or dangerously.
+2. New facts, lessons, pitfalls, rules → `knowledge/` (right subdir per INDEX.md), not your home-dir memory/learning files.
+3. **Commit knowledge changes with the code that taught them.**
+4. Stale code/docs found during work get REMOVED/updated in the same commit.
+5. **Don't duplicate**: `ksearch` first; patch the existing file.
+
+Full policy: [knowledge/rules/write-back-policy.md](knowledge/rules/write-back-policy.md).

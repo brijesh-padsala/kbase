@@ -1,0 +1,35 @@
+# {{PROJECT}} Knowledge — INDEX
+
+Single source of truth for ALL agents working on {{PROJECT}}.
+
+**KB status:** {{STATUS_LINE}} — see [README.md](README.md) for what the status line obligates. If SCAFFOLDED, complete `knowledge/_bootstrap-brief.md` before relying on anything here.
+
+**Where to look first:**
+
+| Need | File |
+|---|---|
+| How to behave in this repo | [rules/agent-contract.md](rules/agent-contract.md) |
+| Search this knowledge base | `python3 scripts/ksearch.py "<query>"` |
+| Lint/test/CI requirements | [rules/quality-gates.md](rules/quality-gates.md) |
+| Hard boundaries: Always / Ask-first / Never | [rules/boundaries.md](rules/boundaries.md) |
+| Where new knowledge goes (all agents) | [rules/write-back-policy.md](rules/write-back-policy.md) |
+| Stale docs, surfaced failures, pruning | [rules/hygiene.md](rules/hygiene.md) |
+| Starting, resuming, or handing off a session | [rules/new-agent-onboarding.md](rules/new-agent-onboarding.md) |
+| How to maintain THIS knowledge base | [rules/kb-maintenance.md](rules/kb-maintenance.md) |
+| Shared plans queue + status board | [plans/README.md](plans/README.md) |
+| Build/run/test commands | [practices/commands.md](practices/commands.md) |
+| System architecture | [docs/architecture.md](docs/architecture.md) |
+| The KB's own design (4 memory tiers, dual loop) | [docs/agent-memory-architecture.md](docs/agent-memory-architecture.md) |
+| Environments & ops facts | [memory/operations.md](memory/operations.md) |
+| Pitfalls (read before risky work) | [learning/pitfalls.md](learning/pitfalls.md) |
+
+## Layout rules (enforced by charter)
+
+- **rules/** hard constraints — never violated without owner sign-off
+- **practices/** how we build — commands, conventions
+- **docs/** verified architecture and specs (current truth)
+- **memory/** durable operational facts
+- **learning/** append-only dated lessons log + distilled pitfalls
+- **plans/** active work and handoffs — see the [status board](plans/README.md)
+- **archive/** superseded material — history, never cite as current
+- **agents/&lt;name&gt;/** per-agent wiring only — how each tool connects to this KB

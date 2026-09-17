@@ -1,0 +1,41 @@
+# {{PROJECT}} Knowledge — README & Charter
+
+**KB status:** {{STATUS_LINE}}
+
+Single source of truth for ALL agents (claude, codex, cursor, factory, gstack, hermes, whatever comes next) working on {{PROJECT}}. Files beat agent-native memory: markdown + git is the only substrate every agent reads natively, it diffs, reviews, and survives tool churn.
+
+## The status line (read this first)
+
+- `SCAFFOLDED` — structure only, **do not cite as truth**. A `knowledge/_bootstrap-brief.md` should exist; completing it is the highest-priority task for the first agent session.
+- `VERIFIED @ <commit>` — distilled with per-claim evidence. You may cite it; recheck runtime claims against the environment before operational work.
+
+The status line lives here and in [INDEX.md](INDEX.md); both must agree. Flip it to VERIFIED only after a distillation pass, naming a real commit — `scripts/knowledge-gate.py` enforces this at commit time.
+
+## Labels
+
+Every factual claim in `docs/` and `memory/` carries a label: ✅ VERIFIED (evidence cited: file, command output, commit) · ❓ UNVERIFIED (stated but not checked). Dated records may carry ⚠ STALE for claims their sources have outlived — stale material belongs in `archive/`, never cited as current.
+
+## Layout
+
+| Dir | Contents |
+|---|---|
+| `rules/` | hard constraints — behavior, quality gates, boundaries |
+| `practices/` | how we build — commands, conventions |
+| `docs/` | verified architecture, specs (current truth) |
+| `memory/` | durable operational facts — environments, incidents |
+| `learning/` | append-only dated lessons log + distilled pitfalls |
+| `plans/` | active work and handoffs — see the [status board](plans/README.md) |
+| `agents/<name>/` | per-agent wiring only (tool-specific syntax, nothing else) |
+| `archive/` | superseded material — history, never cite as current |
+
+Entry point for every session: [INDEX.md](INDEX.md). Search before reading: `scripts/ksearch.py "<query>"`.
+
+## Charter (short)
+
+1. Default is DON'T write — record only what a future session would otherwise re-derive painfully or dangerously.
+2. Knowledge commits ride with the code that taught them.
+3. Stale code/docs found during work get removed in the same commit.
+4. Agent-native memory holds routing pointers only, never project knowledge.
+5. Don't duplicate — `ksearch` first, patch the existing file.
+
+Full policies: [rules/](rules/). The design behind this layout: [docs/agent-memory-architecture.md](docs/agent-memory-architecture.md).

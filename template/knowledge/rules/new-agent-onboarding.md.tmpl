@@ -1,0 +1,10 @@
+# New-agent onboarding
+
+> **TL;DR:** Five steps from cold start to productive. If the KB status is SCAFFOLDED, step 0 outranks everything.
+
+0. **Check the KB status line** in [INDEX.md](../INDEX.md). If SCAFFOLDED, complete `knowledge/_bootstrap-brief.md` first — that is the session's highest-priority task. Otherwise:
+1. **Read [INDEX.md](../INDEX.md)** — the "Where to look first" table routes everything.
+2. **Search, don't read:** `python3 scripts/ksearch.py "<task>"`. Read the matching TL;DR and needed sections only. Use `--dir` to narrow; `--include-archive` only for historical investigation. If `ksearch` is unavailable, use `rg` over `knowledge/`.
+3. **For code structure**, use `ripwire <source-dir> --for="<task>"` if installed (signatures-not-bodies); else targeted `rg` + read. Verify relevant source and tests before edits.
+4. **Revalidate before acting:** dated knowledge against this checkout (`✅` from an old baseline is a lead, not a fact); runtime claims against the target environment.
+5. **Write back per [write-back-policy.md](write-back-policy.md)** and follow [boundaries.md](boundaries.md) — ask-first items mean ask-first.

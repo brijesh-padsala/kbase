@@ -1,0 +1,37 @@
+# Commands
+
+> **TL;DR:** Highest-frequency commands. Project build/test/lint commands must be filled in at distillation — TODO(project) markers below.
+
+## Project commands — TODO(project)
+
+```bash
+TODO(project)   # lint
+TODO(project)   # tests
+TODO(project)   # build / run locally
+TODO(project)   # apply migrations / deploy step that must never be skipped
+```
+
+## Knowledge search (ksearch) — installed
+
+```bash
+python3 scripts/ksearch.py "<query>"          # ranked excerpts + file pointers (~500 tokens, not whole files)
+python3 scripts/ksearch.py "<query>" --dir rules   # narrow to a subdir
+python3 scripts/ksearch.py "<query>" --json   # machine-readable
+```
+
+Stdlib-only; reads `knowledge/` (override with `KB_ROOT`). Every query is logged to `knowledge/_ksearch-log.tsv` for the zero-hit audit ([hygiene.md](../rules/hygiene.md)).
+
+## Code structure (ripgrep / ripwire) — recommended
+
+```bash
+rg "<literal>"                       # string literals, configs, non-code files
+ripwire <dir> --for="<task>"         # ranked signatures for a task (if installed)
+ripwire <dir> --callers=<SYM>        # who calls SYM
+ripwire <dir> --impact=<SYM>         # transitive blast radius
+```
+
+Prefer ripwire over grep for who-calls-what, blast radius, structural discovery, reuse hotspots. Fall back to `rg` for literals and non-code files.
+
+## Knowledge gate (pre-commit)
+
+`scripts/knowledge-gate.py` validates staged knowledge changes (TL;DR-at-birth, links, plan Status, anti-truncation, KB status-line rules). Wiring snippet: `.pre-commit-knowledge-gate-snippet.yaml` at repo root after `kbase-init`.
