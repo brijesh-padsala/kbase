@@ -33,6 +33,7 @@ AGENTS.md                    # router: search-don't-read table + KB status rule
 .pre-commit-config.yaml      # knowledge-gate hook (created, or snippet to merge)
 scripts/ksearch.py           # BM25 search over knowledge/ — excerpts, not files
 scripts/knowledge-gate.py    # commit-time gate (see below)
+.agents/skills/…/SKILL.md    # thin stubs: /distill, /kb-audit (procedures in knowledge/)
 knowledge/
   INDEX.md                   # entry point — "Where to look first" + KB status line
   README.md                  # charter + the KB status line
@@ -41,12 +42,29 @@ knowledge/
   rules/                     # agent-contract, write-back-policy, hygiene, quality-gates,
                              # boundaries, new-agent-onboarding, kb-maintenance
   practices/commands.md      # ksearch/ripgrep usage + TODO(project) build commands
+  practices/skills/          # canonical skill procedures: distill, kb-audit (+ index)
   learning/                  # append-only lessons log + pitfalls
   memory/operations.md       # environments, runbooks, incidents (never secrets)
   plans/README.md            # numbered-plan status board
-  agents/README.md           # per-agent WIRING.md pattern
+  agents/README.md           # per-agent WIRING pattern + the librarian subagent role
 knowledge/_bootstrap-brief.md        # existing mode only — deleted at VERIFIED flip
 ```
+
+## Skills & subagents
+
+Two skills ship as **canonical procedures in `knowledge/practices/skills/`** with
+6-line per-harness stubs in `.agents/skills/` (procedures here, facts never in
+prompts — same rule as the memory design):
+
+- **`/distill`** — runs the bootstrap brief end-to-end and lands the gate-checked
+  SCAFFOLDED → VERIFIED flip.
+- **`/kb-audit`** — the consolidation loop: query-log zero-hit review, aging-✅
+  spot-checks, reference audit, file splits.
+
+One subagent role is specified (harness-agnostically, in the scaffold's
+`agents/README.md`): the read-only **librarian**, which answers "what does the KB
+say about X" in its own context and returns citations — the token-efficient way to
+query the KB from a busy main thread.
 
 ## The gate (commit-time, deterministic)
 

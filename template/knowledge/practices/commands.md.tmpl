@@ -1,8 +1,8 @@
 # Commands
 
-> **TL;DR:** Highest-frequency commands. Project build/test/lint commands must be filled in at distillation — TODO(project) markers below.
+> **TL;DR:** Highest-frequency commands. Project build/test/lint commands must be filled in at distillation — the markers below.
 
-## Project commands — TODO(project)
+## Project commands (fill at distillation)
 
 ```bash
 TODO(project)   # lint
@@ -31,6 +31,13 @@ ripwire <dir> --impact=<SYM>         # transitive blast radius
 ```
 
 Prefer ripwire over grep for who-calls-what, blast radius, structural discovery, reuse hotspots. Fall back to `rg` for literals and non-code files.
+
+## Skills
+
+Two skill procedures ship with the KB — canonical content in [skills/](skills/README.md), thin per-harness stubs in `.agents/skills/`:
+
+- **distill** — the bootstrap distillation pass (SCAFFOLDED → VERIFIED). Invoked via the stub, or by following [skills/distill.md](skills/distill.md) directly.
+- **kb-audit** — the consolidation pass (query-log review, label spot-check, reference audit).
 
 ## Knowledge gate (pre-commit)
 

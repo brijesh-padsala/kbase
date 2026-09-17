@@ -88,21 +88,26 @@ def main():
                     "(plans/README.md rule 2)"
                 )
 
-    # 2. Anti-truncation of protected records.
+    # 2. Anti-truncation of protected records — only once the KB is VERIFIED.
+    #    The SCAFFOLDED→VERIFIED distillation legitimately rewrites the stubs
+    #    wholesale; the guard protects accumulated history, which starts existing
+    #    at the flip.
     archive_note = any(
         path.startswith("knowledge/archive/") and content is not None
         for path, content in staged.items()
     )
-    for path in PROTECTED:
-        if path not in staged:
-            continue
-        old = git("show", f"HEAD:{path}", check=False)
-        new = staged[path] or ""
-        if len(new) < len(old) * 0.5 and not archive_note:
-            problems.append(
-                f"{path}: shrank >50% — silent truncation? If intentional, also stage "
-                "an archive/ note explaining the removal."
-            )
+    head_status, _ = parse_status(git("show", "HEAD:knowledge/README.md", check=False))
+    if head_status != "SCAFFOLDED":
+        for path in PROTECTED:
+            if path not in staged:
+                continue
+            old = git("show", f"HEAD:{path}", check=False)
+            new = staged[path] or ""
+            if len(new) < len(old) * 0.5 and not archive_note:
+                problems.append(
+                    f"{path}: shrank >50% — silent truncation? If intentional, also stage "
+                    "an archive/ note explaining the removal."
+                )
 
     if not staged:
         return report(problems)

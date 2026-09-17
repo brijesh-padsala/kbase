@@ -366,6 +366,16 @@ def main():
         shutil.copy2(TEMPLATE_DIR / "scripts" / script, dst)
         copied += 1
 
+    # --- skill stubs (.agents/skills/) — thin pointers to canonical procedures
+    for skill in ("distill", "kb-audit"):
+        dst = root / ".agents" / "skills" / skill / "SKILL.md"
+        if dst.exists() and not a.force:
+            print(f"[kbase] skip (exists, no --force): .agents/skills/{skill}/SKILL.md")
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(TEMPLATE_DIR / "skills" / skill / "SKILL.md", dst)
+        copied += 1
+
     # --- root AGENTS.md
     agents = root / "AGENTS.md"
     block = render((TEMPLATE_DIR / "AGENTS.md.tmpl").read_text(encoding="utf-8"), values)
@@ -376,6 +386,16 @@ def main():
     else:
         agents.write_text(block, encoding="utf-8")
         copied += 1
+
+    # --- keep the ksearch query log local (audit input, not repo content)
+    gi = root / ".gitignore"
+    entry = "knowledge/_ksearch-log.tsv"
+    current = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    if entry not in current.splitlines():
+        with open(gi, "a", encoding="utf-8") as fh:
+            if current and not current.endswith("\n"):
+                fh.write("\n")
+            fh.write(entry + "\n")
 
     # --- pre-commit wiring
     pc = root / ".pre-commit-config.yaml"
@@ -410,11 +430,14 @@ def main():
     if mode == "existing":
         print(f"""
 [kbase] DONE — {copied} files. KB status: SCAFFOLDED (until distilled).
+Skill stubs: .agents/skills/distill + kb-audit (canonical procedures in
+knowledge/practices/skills/). If your harness auto-discovers .agents/skills/,
+/distill runs the bootstrap pass directly.
 NEXT STEP (the whole interface): open an agent session in this repo and say
     "read AGENTS.md"
 The router's bootstrap rule sends it to knowledge/_bootstrap-brief.md; when the
 distillation completes it flips the status to VERIFIED and deletes the brief.
-Then: git add knowledge/ scripts/ AGENTS.md .pre-commit* && commit.""")
+Then: git add knowledge/ scripts/ .agents/ AGENTS.md .pre-commit* && commit.""")
     else:
         print(f"""
 [kbase] DONE — {copied} files. KB status: VERIFIED @ {short} (init baseline).

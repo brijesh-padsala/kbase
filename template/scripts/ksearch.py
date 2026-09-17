@@ -243,6 +243,23 @@ def search(
 
     scored.sort(reverse=True)
     scored = scored[:limit]
+
+    # usage logging for KB evaluation (zero-hit audit — see rules/hygiene.md):
+    # timestamp, query, top hit, hit count. Logged BEFORE the no-match return
+    # so zero-hit queries are auditable too.
+    if not as_json and not os.environ.get("KSEARCH_NO_LOG"):
+        try:
+            import datetime
+
+            logf = os.path.join(KB_ROOT, "_ksearch-log.tsv")
+            with open(logf, "a", encoding="utf-8") as fh:
+                top = os.path.relpath(scored[0][1], KB_ROOT) if scored else "-"
+                fh.write(
+                    f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{' '.join(query.split())}\t{top}\t{len(scored)}\n"
+                )
+        except OSError:
+            pass
+
     if not scored:
         print("no matches")
         return 1
@@ -263,21 +280,6 @@ def search(
             )
         )
         return 0
-
-    # usage logging for KB evaluation (zero-hit audit — see rules/hygiene.md):
-    # timestamp, query, top hit, hit count
-    if not os.environ.get("KSEARCH_NO_LOG"):
-        try:
-            import datetime
-
-            logf = os.path.join(KB_ROOT, "_ksearch-log.tsv")
-            with open(logf, "a", encoding="utf-8") as fh:
-                top = os.path.relpath(scored[0][1], KB_ROOT) if scored else "-"
-                fh.write(
-                    f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{' '.join(query.split())}\t{top}\t{len(scored)}\n"
-                )
-        except OSError:
-            pass
 
     print(f"top {len(scored)} of {n} files | KB: {KB_ROOT}")
     for s, f in scored:
