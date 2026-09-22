@@ -14,6 +14,8 @@ Every knowledge file opens with:
 
 `ksearch` field-weights TL;DR/description above headings above body — a file without a TL;DR is both harder to retrieve and more expensive to read. The TL;DR must sit within the first 10 lines (`scripts/kbformat.py` scans and the gate enforces the same window). Keep the TL;DR vocabulary aligned with the words people actually query (audited via `_ksearch-log.tsv`, see [hygiene.md](hygiene.md)).
 
+Keep startup instructions and skill descriptions concise; place detail in linked notes read on demand. Validate retrieval changes with [project query judgments](../practices/retrieval-evaluation.md), including no-answer questions. Do not add keywords solely to pass the starter fixture.
+
 ## Scope — what counts as a current note
 
 `ksearch` indexes and `scripts/knowledge-gate.py` polices the same scope, declared once in `scripts/kbformat.py`: `knowledge/**/*.md` excluding `archive/` and `*-archive/` directories, `plans/artifacts/` (supporting material, not notes), and `_`-prefixed files (working files like the bootstrap brief and the ksearch log). `ksearch --include-archive` widens *retrieval* to archived and artifact material; the enforcement scope never widens.

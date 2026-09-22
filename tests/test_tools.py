@@ -82,6 +82,116 @@ class InstalledTools(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(before, self.snapshot())
 
+    def context_report(self, *args, env=None):
+        result = subprocess.run(
+            [sys.executable, str(self.root / "scripts/kbase-doctor.py"), "--context-only", "--json", *args],
+            cwd=self.root, env=self.env if env is None else env, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def test_context_inventory_deduplicates_imports_and_stops_cycles(self):
+        agents = self.root / "AGENTS.md"
+        agents.write_text("# Router\n@docs/context.md\n", encoding="utf-8")
+        (self.root / "CLAUDE.md").write_text("@AGENTS.md\n@docs/context.md\n", encoding="utf-8")
+        (self.root / "docs").mkdir()
+        (self.root / "docs/context.md").write_text(
+            "@../AGENTS.md\n```text\n@missing-fenced.md\n```\n`@missing-inline.md`\n", encoding="utf-8",
+        )
+        context = self.context_report()["context"]
+        files = context["startup"]["files"]
+        self.assertEqual({item["path"] for item in files}, {"AGENTS.md", "CLAUDE.md", "docs/context.md"})
+        self.assertEqual(len(files), 3)
+        self.assertEqual(context["startup"]["totals"]["bytes"], sum((self.root / item["path"]).stat().st_size for item in files))
+        self.assertEqual(context["unavailable"], [])
+
+    def test_context_unicode_bytes_and_required_read_are_separate(self):
+        text = "# Mémoire 🧠\r\nSecond line\r\n"
+        (self.root / "AGENTS.md").write_bytes(text.encode("utf-8"))
+        context = self.context_report()["context"]
+        agents = next(item for item in context["startup"]["files"] if item["path"] == "AGENTS.md")
+        self.assertEqual(agents["bytes"], len(text.encode("utf-8")))
+        self.assertEqual(agents["chars"], len(text))
+        self.assertEqual(agents["lines"], 2)
+        self.assertEqual(agents["estimated_tokens"], (len(text) + 3) // 4)
+        self.assertEqual([item["path"] for item in context["required_reads"]["files"]], ["knowledge/INDEX.md"])
+        self.assertNotIn("knowledge/INDEX.md", [item["path"] for item in context["startup"]["files"]])
+        self.assertIn("not a model tokenizer", context["measurement"])
+
+    def test_context_only_needs_no_shell_tools_and_writes_nothing(self):
+        env = dict(self.env, PATH="")
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
+        before = self.snapshot()
+        report = self.context_report(env=env)
+        self.assertTrue(report["ok"])
+        self.assertIn("runtime checks skipped", report["checks"][0]["message"])
+        wrapped = subprocess.run(
+            [sys.executable, str(CLI), "doctor", str(self.root), "--context-only", "--json"],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(wrapped.returncode, 0, wrapped.stdout + wrapped.stderr)
+        self.assertTrue(json.loads(wrapped.stdout)["ok"])
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse((self.root / "knowledge/_ksearch-log.tsv").exists())
+        self.assertFalse(list(self.root.rglob("__pycache__")))
+
+    def test_context_skips_outside_remote_sensitive_and_symlink_imports(self):
+        outside = Path(self.temp.name) / "outside.md"
+        outside.write_bytes(b"SECRET CONTENT\xff")  # Decoding this would fail if the guard read it.
+        (self.root / "linked.md").symlink_to(outside)
+        (self.root / ".env").write_text("SECRET CONTENT", encoding="utf-8")
+        (self.root / "CLAUDE.md").write_text(
+            "@AGENTS.md\n@../outside.md\n@https://example.test/rules.md\n@.env\n@linked.md\n", encoding="utf-8",
+        )
+        report = self.context_report()
+        unavailable = report["context"]["unavailable"]
+        self.assertEqual(len(unavailable), 4)
+        self.assertTrue(any("leaves repository" in item["reason"] for item in unavailable))
+        self.assertTrue(any("sensitive" in item["reason"] for item in unavailable))
+        self.assertTrue(any("symlink" in item["reason"] for item in unavailable))
+        self.assertNotIn("SECRET CONTENT", json.dumps(report))
+        self.assertNotIn("utf-8", " ".join(item["reason"] for item in unavailable))
+
+    def test_context_metadata_excludes_bodies_and_warns_on_long_descriptions(self):
+        stub = self.root / ".agents/skills/kb-handoff/SKILL.md"
+        description = "é" * 301  # 602 UTF-8 bytes, despite only 301 characters.
+        body = "body material on demand " * 1000
+        stub.write_text(f"---\nname: kb-handoff\ndescription: {description}\n---\n{body}\n", encoding="utf-8")
+        report = self.context_report()
+        context = report["context"]
+        metadata = context["skill_metadata"]
+        entry = next(item for item in metadata["codex"]["files"] if item["name"] == "kb-handoff")
+        self.assertEqual(entry["bytes"], len(("kb-handoff\n" + description + "\n").encode("utf-8")))
+        self.assertEqual(entry["description_bytes"], 602)
+        self.assertTrue(any(c["level"] == "WARN" and "600-byte" in c["message"] for c in report["checks"]))
+        self.assertIn("kb-handoff", context["duplicate_skill_names"])
+        self.assertEqual(set(metadata), {"codex", "claude"})
+        self.assertNotIn("body material", json.dumps(report))
+
+    def test_context_budget_deduplicates_index_when_also_imported(self):
+        (self.root / "AGENTS.md").write_text("x" * 6001 + "\n@knowledge/INDEX.md\n", encoding="utf-8")
+        context = self.context_report()
+        required = context["context"]["required_reads"]["files"][0]
+        self.assertTrue(required["already_in_startup"])
+        self.assertEqual(context["context"]["startup"]["totals"]["bytes"], context["context"]["unique_router_and_required_reads"]["bytes"])
+        self.assertTrue(any("6000 bytes" in check["message"] for check in context["checks"]))
+
+    def test_context_only_still_rejects_invalid_manifest_and_non_repository(self):
+        (self.root / ".kbase.json").write_text("{}", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(self.root / "scripts/kbase-doctor.py"), "--context-only", "--json"],
+            cwd=self.root, env=dict(self.env, PATH=""), capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(json.loads(result.stdout)["ok"])
+        self.assertNotIn("Traceback", result.stderr)
+        outside = subprocess.run(
+            [sys.executable, str(self.root / "scripts/kbase-doctor.py"), self.temp.name, "--context-only", "--json"],
+            cwd=self.root, env=dict(self.env, PATH=""), capture_output=True, text=True,
+        )
+        self.assertEqual(outside.returncode, 1)
+        self.assertIn("repository root", outside.stdout)
+
     def test_missing_adapter_fails_doctor(self):
         (self.root / ".claude/skills/kb-review/SKILL.md").unlink()
         result = self.cli("doctor", "--json")

@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """ksearch — keyword search over this repo's knowledge base.
 
-Returns ranked excerpts with file pointers, so agents read ~500 tokens
-instead of whole files. BM25-style scoring with per-field weights (description/TL;DR
+Returns ranked excerpts with line citations, bounded to 2400 UTF-8 bytes by
+default. BM25-style scoring with per-field weights (description/TL;DR
 above headings above body) so files that are ABOUT a term outrank incidental mentions.
 The note format and current-file scope come from kbformat (shared with
 knowledge-gate — one declaration, no drift). Python standard library only.
 
 Usage:
-  ksearch <query> [--json] [--limit N] [--dir SUBDIR]
+  ksearch <query> [--json] [--limit N] [--dir SUBDIR] [--max-bytes N]
   ksearch <query> --include-archive  # opt into archived/artifact material
 
 KB location: $KB_ROOT, else <script_dir>/../knowledge.
-Exit codes: 0 = hits, 1 = no hits.
+Exit codes: 0 = hits, 1 = no hits, 2 = invalid arguments or insufficient budget.
+The byte budget covers complete successful stdout, including metadata/newline.
+Use --max-bytes 0 for no total budget. Budget omissions are reported on stderr.
 """
 
 import argparse
@@ -75,12 +77,16 @@ STOPWORDS = {
 FIELD_WEIGHTS = {"desc": 4.0, "tldr": 4.0, "head": 2.0, "body": 1.0}
 
 
+def _token_spans(text: str):
+    """Share exact term normalization between ranking and excerpt selection."""
+    for match in re.finditer(r"[A-Za-z0-9_.\-/]+", text):
+        term = match.group().lower().lstrip("-")
+        if term not in STOPWORDS and len(term) > 1:
+            yield term, match.start(), match.end()
+
+
 def tokenize(text: str):
-    return [
-        t.lower()
-        for t in re.findall(r"[A-Za-z0-9_.\-/]+", text)
-        if t.lower() not in STOPWORDS and len(t) > 1
-    ]
+    return [term for term, _, _ in _token_spans(text)]
 
 
 def resolve_kb_root() -> str:
@@ -183,19 +189,91 @@ def score(terms: list[str], docs: dict[str, str]):
     return scored, descs
 
 
-def best_excerpt(text: str, terms: list[str], width: int = 320) -> str:
-    """Return the line-window with the highest term density."""
+def select_passage(text: str, terms: list[str]) -> dict:
+    """Select matching content, preferring prose to frontmatter and navigation."""
     lines = text.splitlines()
-    best_score, best_i = -1.0, 0
+    query_terms = set(terms)
+    front_end = 0
+    if lines and lines[0].strip() == "---":
+        front_end = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+    toc = re.compile(r"^\s*(?:[-*+]|\d+[.)])?\s*\[[^\]]+\]\(#[^)]+\)\s*$")
+    candidates, headings = [], []
+    heading, fence = None, None
     for i, line in enumerate(lines):
-        low = line.lower()
-        score = sum(low.count(t) for t in terms)
-        if score > best_score:
-            best_score, best_i = score, i
-    lo = max(0, best_i - 2)
-    hi = min(len(lines), best_i + 4)
-    out = " ⏎ ".join(line.strip() for line in lines[lo:hi] if line.strip())
-    return out[: width * 2]
+        marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if marker:
+            run = marker.group(1)
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence):
+                fence = None
+        title = kbformat.HEADING_RE.match(line) if i >= front_end and fence is None else None
+        if title:
+            heading = title.group(1)
+        headings.append(heading)
+        matches = [(term, start, end) for term, start, end in _token_spans(line) if term in query_terms]
+        if matches:
+            preferred = i >= front_end and not toc.match(line) and fence is None and not marker
+            quality = (preferred, len({term for term, _, _ in matches}), len(matches), -i)
+            candidates.append((quality, i, matches[0][1:]))
+    if candidates:
+        _, best_i, anchor = max(candidates)
+    else:
+        best_i, anchor = min(front_end, max(len(lines) - 1, 0)), (0, 1)
+    hi = min(len(lines), best_i + 3)
+    for i in range(best_i + 1, hi):
+        if kbformat.HEADING_RE.match(lines[i]) or toc.match(lines[i]):
+            hi = i
+            break
+    while hi > best_i + 1 and not lines[hi - 1].strip():
+        hi -= 1
+    return {
+        "text": "\n".join(lines[best_i:hi]), "anchor": anchor,
+        "line_start": best_i + 1, "heading": headings[best_i] if headings else None,
+    }
+
+
+def crop_text(text: str, max_bytes: int, anchor=(0, 1)):
+    """Fit a contiguous UTF-8 slice around a complete match, with visible ellipses.
+
+    Return (display text, source start, source end, truncated), or None when
+    even the match and truncation markers cannot fit. Offsets are characters.
+    """
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text, 0, len(text), False
+    start, end = anchor[0], min(anchor[1], len(text))
+    used = len(text[start:end].encode("utf-8"))
+    # Reserve both ellipses; reclaiming a few bytes at a boundary is unnecessary.
+    available = max_bytes - 3 * (start > 0) - 3 * (end < len(text))
+    if used > available:
+        return None
+    left_open, right_open = start > 0, end < len(text)
+    while left_open or right_open:
+        if left_open:
+            cost = len(text[start - 1].encode("utf-8"))
+            if used + cost <= available:
+                start -= 1
+                used += cost
+                left_open = start > 0
+            else:
+                left_open = False
+        if right_open:
+            cost = len(text[end].encode("utf-8"))
+            if used + cost <= available:
+                end += 1
+                used += cost
+                right_open = end < len(text)
+            else:
+                right_open = False
+    shown = ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+    return shown, start, end, True
+
+
+def best_excerpt(text: str, terms: list[str], width: int = 320) -> str:
+    """Compatibility helper: a bounded excerpt; search also returns its citation."""
+    passage = select_passage(text, terms)
+    cropped = crop_text(passage["text"], width * 2, passage["anchor"])
+    return cropped[0] if cropped else ""
 
 
 def log_query(query: str, scored: list, root: str):
@@ -211,32 +289,83 @@ def log_query(query: str, scored: list, root: str):
         )
 
 
-def render_human(scored: list, descs: dict, docs: dict, terms: list[str], n: int, root: str):
-    print(f"top {len(scored)} of {n} files | KB: {root}")
-    for s, f in scored:
-        rel = os.path.relpath(f, root)
-        print(f"\n{s:.2f}  {rel}")
-        if descs[f]:
-            print(f"      {descs[f]}")  # description ahead of the computed excerpt
-        print(f"      {best_excerpt(docs[f], terms)}")
-    print("\nread less: ksearch again narrower, or read only the cited section")
+def result_row(candidate: dict, excerpt_bytes=640, include_description=True):
+    passage = candidate["passage"]
+    cropped = crop_text(passage["text"], excerpt_bytes, passage["anchor"])
+    if cropped is None:
+        return None
+    excerpt, start, end, truncated = cropped
+    description = candidate["description"] or ""
+    heading = passage["heading"] or ""
+    desc_crop = crop_text(description, 160) if include_description else ("", 0, 0, bool(description))
+    head_crop = crop_text(heading, 120)
+    line_start = passage["line_start"] + passage["text"][:start].count("\n")
+    # A trailing newline belongs to the preceding source line, not an empty one.
+    line_end = line_start + passage["text"][start:end].rstrip("\n").count("\n")
+    return {
+        "score": candidate["score"], "file": candidate["file"],
+        "description": desc_crop[0] or None, "excerpt": excerpt,
+        "line_start": line_start, "line_end": line_end, "heading": head_crop[0] or None,
+        "truncated": truncated or desc_crop[3] or head_crop[3],
+    }
 
 
-def render_json(scored: list, descs: dict, docs: dict, terms: list[str], root: str):
-    print(
-        json.dumps(
-            [
-                {
-                    "score": round(s, 3),
-                    "file": os.path.relpath(f, root),
-                    "description": descs[f] or None,
-                    "excerpt": best_excerpt(docs[f], terms),
-                }
-                for s, f in scored
-            ],
-            indent=1,
-        )
-    )
+def render_output(rows: list[dict], as_json: bool, total: int, n: int) -> str:
+    if as_json:
+        return json.dumps(rows, ensure_ascii=False, separators=(",", ":")) + "\n"
+    lines = [f"top {len(rows)} of {total} matches | {n} notes"]
+    for row in rows:
+        lines.append(f"\n{row['score']:.2f}  {row['file']}:{row['line_start']}-{row['line_end']}")
+        if row["heading"]:
+            lines.append(f"  {row['heading']}")
+        if row["description"]:
+            lines.append(f"  {row['description']}")
+        lines.append("  " + row["excerpt"].replace("\n", "\n  "))
+        if row["truncated"]:
+            lines.append("  [truncated]")
+    return "\n".join(lines) + "\n"
+
+
+def fit_results(candidates: list[dict], as_json: bool, total: int, n: int, max_bytes: int):
+    """Pack a ranked prefix, shortening the last passage around its match."""
+    rows = []
+    for candidate in candidates:
+        passage = candidate["passage"]
+        start, end = passage["anchor"]
+        natural_width = max(640, len(passage["text"][start:end].encode("utf-8")) + 6)
+        row = result_row(candidate, natural_width)
+        output = render_output(rows + [row], as_json, total, n) if row else ""
+        if row and (not max_bytes or len(output.encode("utf-8")) <= max_bytes):
+            rows.append(row)
+            continue
+        # Drop a redundant description before reducing the actual evidence.
+        best, low, high = None, 1, natural_width
+        while low <= high:
+            middle = (low + high) // 2
+            shorter = result_row(candidate, middle, include_description=False)
+            if shorter is None:
+                low = middle + 1
+                continue
+            trial = render_output(rows + [shorter], as_json, total, n)
+            if len(trial.encode("utf-8")) <= max_bytes:
+                best, low = shorter, middle + 1
+            else:
+                high = middle - 1
+        if best is not None:
+            rows.append(best)
+        break
+    return rows
+
+
+def _no_matches(as_json: bool, max_bytes: int, error: str | None = None):
+    output = "[]\n" if as_json else ("" if error else "no matches\n")
+    if max_bytes and len(output.encode("utf-8")) > max_bytes:
+        print("--max-bytes too small for an empty result; increase it or use 0", file=sys.stderr)
+        return 2
+    if error:
+        print(error, file=sys.stderr)
+    sys.stdout.write(output)
+    return 1
 
 
 def search(
@@ -246,20 +375,22 @@ def search(
     as_json: bool,
     include_archive: bool = False,
     root: str | None = None,
+    *,
+    max_bytes: int = 2400,
 ):
+    if max_bytes < 0:
+        print("--max-bytes must be nonnegative (0 disables the budget)", file=sys.stderr)
+        return 2
     root = root if root is not None else resolve_kb_root()
     terms = list(dict.fromkeys(tokenize(query)))
     if not terms:
-        print("query has no searchable terms", file=sys.stderr)
-        return 1
+        return _no_matches(as_json, max_bytes, "query has no searchable terms")
     files = list_md_files(subdir, include_archive, root)
     if not files:
-        print(f"no .md files under {root}", file=sys.stderr)
-        return 1
+        return _no_matches(as_json, max_bytes, f"no .md files under {root}")
 
     docs = read_docs(files)
     scored, descs = score(terms, docs)
-    scored = scored[:limit]
 
     # usage logging for KB evaluation (zero-hit audit — see rules/hygiene.md).
     # Logged BEFORE the no-match return so zero-hit queries are auditable too.
@@ -270,13 +401,21 @@ def search(
             pass
 
     if not scored:
-        print("no matches")
-        return 1
+        return _no_matches(as_json, max_bytes)
 
-    if as_json:
-        render_json(scored, descs, docs, terms, root)
-    else:
-        render_human(scored, descs, docs, terms, len(docs), root)
+    candidates = [
+        {"score": round(s, 3), "file": os.path.relpath(f, root), "description": descs[f],
+         "passage": select_passage(docs[f], terms)}
+        for s, f in scored[:limit]
+    ]
+    rows = fit_results(candidates, as_json, len(scored), len(docs), max_bytes)
+    if not rows:
+        print("--max-bytes too small for the top citation; increase it or use 0", file=sys.stderr)
+        return 2
+    sys.stdout.write(render_output(rows, as_json, len(scored), len(docs)))
+    omitted = len(candidates) - len(rows)
+    if omitted:
+        print(f"budget omitted {omitted} result(s); increase --max-bytes or narrow the query", file=sys.stderr)
     return 0
 
 
@@ -285,6 +424,7 @@ def main():
     ap.add_argument("query", nargs="?", help="search terms")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--limit", type=int, default=5)
+    ap.add_argument("--max-bytes", type=int, default=2400, help="hard UTF-8 stdout budget (default: 2400; 0: unbounded)")
     ap.add_argument("--dir", help="restrict to knowledge/ subdir (e.g. docs, rules)")
     ap.add_argument(
         "--include-archive", action="store_true", help="include archived and artifacts directories"
@@ -292,12 +432,14 @@ def main():
     a = ap.parse_args()
     if a.limit < 1:
         ap.error("--limit must be positive")
+    if a.max_bytes < 0:
+        ap.error("--max-bytes must be nonnegative")
     if a.dir and (os.path.isabs(a.dir) or ".." in a.dir.split(os.sep)):
         ap.error("--dir must be a subdirectory within knowledge/")
     if not a.query:
         ap.print_help()
         return 2
-    return search(a.query, a.limit, a.dir, a.json, a.include_archive)
+    return search(a.query, a.limit, a.dir, a.json, a.include_archive, max_bytes=a.max_bytes)
 
 
 if __name__ == "__main__":

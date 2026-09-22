@@ -1,0 +1,16 @@
+{"id":"bootstrap-status","query":"SCAFFOLDED VERIFIED bootstrap","relevant":["rules/agent-contract.md","practices/skills/distill.md","README.md","INDEX.md"]}
+{"id":"handoff-resume","query":"resume handoff ownership","relevant":["practices/skills/kb-handoff.md"]}
+{"id":"prepare-plan","query":"acceptance criteria file ownership plan","relevant":["practices/skills/kb-plan.md"]}
+{"id":"implement-plan","query":"execute authorized plan validation","relevant":["practices/skills/kb-implement.md"]}
+{"id":"review-findings","query":"review severity findings acceptance","relevant":["practices/skills/kb-review.md"]}
+{"id":"board-status","query":"DRAFT READY IN-PROGRESS REVIEW-PENDING","relevant":["plans/README.md","practices/skills/kb-board.md"]}
+{"id":"audit-retrieval","query":"zero-hit query log pruning","relevant":["practices/skills/kb-audit.md","rules/hygiene.md"]}
+{"id":"write-back-policy","query":"when write back knowledge default","relevant":["rules/write-back-policy.md"]}
+{"id":"boundaries","query":"secrets destructive approval","relevant":["rules/boundaries.md","rules/agent-contract.md"]}
+{"id":"structural-tools","query":"ripwire callers impact exemplar","relevant":["practices/commands.md","rules/agent-contract.md"]}
+{"id":"note-maintenance","query":"splitting notes TL;DR link","relevant":["rules/kb-maintenance.md"]}
+{"id":"distillation-evidence","query":"distillation evidence verify baseline","relevant":["practices/skills/distill.md"]}
+{"id":"quality-commands","query":"lint typecheck tests toolchain","relevant":["rules/quality-gates.md","practices/commands.md"]}
+{"id":"absent-biology","query":"axolotl metamorphosis","relevant":[]}
+{"id":"absent-astronomy","query":"quasar redshift luminosity","relevant":[]}
+{"id":"absent-chemistry","query":"stoichiometry titration molarity","relevant":[]}

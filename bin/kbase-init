@@ -33,7 +33,7 @@ from pathlib import Path
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "template"
 VERSION_FILE = TEMPLATE_DIR.parent / "VERSION"
-SCRIPTS = ("kbformat.py", "ksearch.py", "knowledge-gate.py", "kbase-doctor.py")
+SCRIPTS = ("kbformat.py", "ksearch.py", "knowledge-gate.py", "kbase-doctor.py", "ksearch-eval.py")
 AGENT_DIRS = {"codex": ".agents", "claude": ".claude"}
 CORE_SKILLS = ("distill", "kb-audit", "kb-handoff")
 WORKFLOW_SKILLS = ("kb-plan", "kb-implement", "kb-review", "kb-board")
@@ -497,7 +497,7 @@ def main():
     # Always inspect the generated KB, independent of caller cwd/environment.
     env = dict(os.environ, KSEARCH_NO_LOG="1", KB_ROOT=str(root / "knowledge"))
     result = subprocess.run(
-        [sys.executable, str(root / "scripts" / "ksearch.py"), "--limit", "3", "knowledge"],
+        [sys.executable, str(root / "scripts" / "ksearch.py"), "--limit", "3", "--max-bytes", "0", "knowledge"],
         cwd=root, capture_output=True, text=True, env=env,
     )
     valid_no_hits = result.returncode == 1 and result.stdout.strip() == "no matches"

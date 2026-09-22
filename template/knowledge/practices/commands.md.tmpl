@@ -15,13 +15,21 @@ TODO(project)   # apply migrations / deploy step that must never be skipped
 ## Knowledge search (ksearch) — installed
 
 ```bash
-python3 scripts/ksearch.py "<query>"          # ranked excerpts + file pointers (~500 tokens, not whole files)
+python3 scripts/ksearch.py "<query>"          # excerpts + source lines; stdout capped at 2,400 UTF-8 bytes
+python3 scripts/ksearch.py "<query>" --limit 3 --max-bytes 1600  # smaller result budget
 python3 scripts/ksearch.py "<query>" --dir rules   # narrow to a subdir
 python3 scripts/ksearch.py "<query>" --json   # machine-readable
 python3 scripts/ksearch.py "<query>" --include-archive  # archived/artifact material too
 ```
 
-Stdlib-only; reads `knowledge/` (override with `KB_ROOT`). Every query is logged to `knowledge/_ksearch-log.tsv` for the zero-hit audit ([hygiene.md](../rules/hygiene.md)).
+Stdlib-only; reads `knowledge/` (override with `KB_ROOT`). The default limit is five results; `--max-bytes 0` opts into unbounded stdout. JSON stays an array and includes `line_start`, `line_end`, `heading`, and `truncated`. Budget omissions produce a short stderr notice; an unusably small budget exits 2. Bytes are not model tokens. Read cited lines when more evidence is needed.
+
+Human-format searches are logged to `knowledge/_ksearch-log.tsv` for the zero-hit audit ([hygiene.md](../rules/hygiene.md)); JSON searches do not log. Set `KSEARCH_NO_LOG=1` to disable logging. See [retrieval evaluation](retrieval-evaluation.md) for project judgments and cost measurement.
+
+```bash
+python3 scripts/ksearch-eval.py knowledge/evals/cases.jsonl --root knowledge
+python3 scripts/ksearch-eval.py knowledge/evals/cases.jsonl --root knowledge --max-bytes 1600 --json
+```
 
 ## Code structure (ripgrep / ripwire) — recommended
 
@@ -57,12 +65,13 @@ python3 scripts/knowledge-gate.py --all    # full current working tree; useful i
 python3 scripts/kbase-doctor.py            # installation, integration, and KB diagnostics
 python3 scripts/kbase-doctor.py --strict   # warnings also produce a nonzero exit
 python3 scripts/kbase-doctor.py --json     # machine-readable diagnostics
+python3 scripts/kbase-doctor.py --context-only --json  # local context sizes; no tool subprocesses
 /path/to/kbase/bin/kbase doctor .          # same doctor from the scaffold checkout
 ```
 
 The staged gate validates the commit's knowledge changes without consulting unrelated unstaged edits. The full-tree check validates the current checkout, including changes not staged. It does not replace the staged anti-truncation check. The installer creates `.pre-commit-config.yaml` or provides a merge snippet when a config already exists; activate the hook with `pre-commit install` after installing pre-commit through the project's tooling.
 
-Doctor fails on structural errors. Unfilled project markers, an inactive hook, or unavailable optional ripwire produce warnings; use `--strict` when those should fail an onboarding or CI check.
+Doctor fails on structural errors. Unfilled project markers, an inactive hook, or unavailable optional ripwire produce warnings; use `--strict` when those should fail an onboarding or CI check. Its context inventory reports local instruction/import bytes, required INDEX reading, and skill metadata separately; character-based token estimates exclude unknown harness/global context and are not actual usage.
 
 ## Updating generated integrations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scaffold, diagnose, check, and safely update an installed knowledge base."""
+"""Scaffold, diagnose, evaluate retrieval, check, and update project knowledge."""
 
 import argparse
 import difflib
@@ -125,25 +125,42 @@ def main():
     sub.add_parser("init", help="initialize a repository (see init --help)")
     for name, help_text in (("doctor", "check installation and optional tooling"),
                             ("check", "validate the full working-tree KB"),
+                            ("eval", "evaluate project retrieval judgments and output size"),
                             ("update", "preview generated tooling updates")):
         command = sub.add_parser(name, help=help_text)
         command.add_argument("target", nargs="?", default=".")
         if name == "doctor":
             command.add_argument("--strict", action="store_true")
             command.add_argument("--json", action="store_true")
+            command.add_argument("--context-only", action="store_true", help="inventory local context files without running tools")
+        if name == "eval":
+            command.add_argument("--cases", help="judgments JSONL (default: target knowledge/evals/cases.jsonl)")
+            command.add_argument("--limit", type=int, default=5)
+            command.add_argument("--max-bytes", type=int, default=2400)
+            command.add_argument("--json", action="store_true")
         if name == "update":
             command.add_argument("--apply", action="store_true", help="apply the preview if all managed files are safe")
     args = parser.parse_args()
     try:
-        root = repository(args.target)
+        # Resolve explicit fixture paths before changing cwd to the target repo.
+        cases = Path(args.cases).resolve() if args.command == "eval" and args.cases else None
+        root = (Path(args.target).resolve() if args.command == "doctor" and args.context_only
+                else repository(args.target))
         if args.command == "update":
             return update(root, args.apply)
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         if args.command == "check":
             cmd = [sys.executable, str(root / "scripts/knowledge-gate.py"), "--all"]
+        elif args.command == "eval":
+            cases = cases or root / "knowledge/evals/cases.jsonl"
+            cmd = [sys.executable, str(root / "scripts/ksearch-eval.py"), str(cases),
+                   "--root", str(root / "knowledge"), "--limit", str(args.limit),
+                   "--max-bytes", str(args.max_bytes)]
+            if args.json:
+                cmd.append("--json")
         else:
             cmd = [sys.executable, str(TEMPLATE / "scripts/kbase-doctor.py"), str(root)]
-            cmd += [flag for flag in ("--strict", "--json") if getattr(args, flag[2:].replace("-", "_"))]
+            cmd += [flag for flag in ("--strict", "--json", "--context-only") if getattr(args, flag[2:].replace("-", "_"))]
         return subprocess.call(cmd, cwd=root, env=env)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"kbase: {exc}", file=sys.stderr)

@@ -55,7 +55,7 @@ class InitSmoke(unittest.TestCase):
     def test_greenfield_scaffold_verifies_itself(self):
         r = self._init()
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        for rel in ("scripts/kbformat.py", "scripts/ksearch.py", "scripts/knowledge-gate.py", "scripts/kbase-doctor.py", "AGENTS.md"):
+        for rel in ("scripts/kbformat.py", "scripts/ksearch.py", "scripts/ksearch-eval.py", "scripts/knowledge-gate.py", "scripts/kbase-doctor.py", "knowledge/evals/cases.jsonl", "AGENTS.md"):
             self.assertTrue((self.root / rel).is_file(), rel)
 
         # The status line the writer produced parses with the shipped reader.
@@ -89,6 +89,27 @@ class InitSmoke(unittest.TestCase):
         self.assertFalse((self.root / "AGENTS.md").exists())
         self.assertFalse((self.root / ".kbase.json").exists())
         self.assertEqual(collision.read_text(), "print('project-owned tool')\n")
+
+    def test_eval_wrapper_uses_target_fixture_and_resolves_explicit_cases(self):
+        self.assertEqual(self._init().returncode, 0)
+        cli = [sys.executable, str(REPO / "bin/kbase"), "eval", str(self.root)]
+        result = subprocess.run(cli + ["--json"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["summary"]["cases"], 16)
+        self.assertEqual(report["summary"]["passed"], 16)
+        self.assertFalse((self.root / "knowledge/_ksearch-log.tsv").exists())
+
+        # Explicit fixtures resolve from the caller, even with a different target cwd.
+        cases = Path(self.tmp.name) / "project judgments.jsonl"
+        cases.write_text(json.dumps({"query": "kb-handoff", "relevant": ["practices/skills/kb-handoff.md"]}) + "\n")
+        result = subprocess.run(cli + ["--cases", cases.name, "--json"], cwd=self.tmp.name,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["summary"]["cases"], 1)
+        cases.write_text('{"query":"handoff","relevant":["missing.md"]}\n')
+        invalid = subprocess.run(cli + ["--cases", str(cases)], capture_output=True, text=True)
+        self.assertEqual(invalid.returncode, 2, invalid.stdout + invalid.stderr)
 
     def test_identical_existing_script_is_managed(self):
         scripts = self.root / "scripts"
@@ -178,7 +199,7 @@ class InitSmoke(unittest.TestCase):
         self.assertEqual(manifest["agents"], ["codex", "claude"])
         self.assertEqual(manifest["source_roots"], ["src", "frontend"])
         self.assertFalse(manifest["workflow"])
-        self.assertEqual(len(manifest["managed_files"]), 10)
+        self.assertEqual(len(manifest["managed_files"]), 11)
         for rel, sha in manifest["managed_files"].items():
             self.assertEqual(hashlib.sha256((self.root / rel).read_bytes()).hexdigest(), sha)
             self.assertTrue(rel.startswith(("scripts/", ".agents/skills/", ".claude/skills/")), rel)

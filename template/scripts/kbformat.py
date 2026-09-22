@@ -88,6 +88,7 @@ def split_fields(text: str):
             start = close + 1
 
     tldr = ""
+    tldr_span = range(0)
     for i in range(start, min(start + TLDR_SCAN_LINES, len(lines))):
         m = TLDR_RE.match(lines[i])
         if m:
@@ -97,11 +98,14 @@ def split_fields(text: str):
                 parts.append(lines[j].lstrip().lstrip(">").strip())
                 j += 1
             tldr = " ".join(p for p in parts if p)
-            start = j
+            tldr_span = range(i, j)
             break
 
     headings, body = [], []
-    for ln in lines[start:]:
+    for i in range(start, len(lines)):
+        if i in tldr_span:
+            continue
+        ln = lines[i]
         m = HEADING_RE.match(ln)
         if m:
             headings.append(m.group(1).strip())

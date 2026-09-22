@@ -67,7 +67,7 @@ class SplitFields(unittest.TestCase):
         desc, tldr, heads, body = kbformat.split_fields(text)
         self.assertEqual(desc, "")
         self.assertEqual(tldr, "ranks on this. continuation of the tldr")
-        self.assertEqual(heads, "Heading one")
+        self.assertEqual(heads, "Title\nHeading one")
         self.assertIn("body line", body)
         self.assertNotIn("TL;DR", body)
 
@@ -82,15 +82,33 @@ class SplitFields(unittest.TestCase):
         desc, tldr, heads, body = kbformat.split_fields(text)
         self.assertEqual(desc, "quoted value")
         self.assertEqual(tldr, "t")
+        self.assertEqual(heads, "Title")
+        self.assertNotIn("description", body)
 
     def test_each_line_lands_in_exactly_one_field(self):
         text = "# T\n> **TL;DR:** x\n## H\nword\n### H2\nword\n"
         desc, tldr, heads, body = kbformat.split_fields(text)
         self.assertEqual(desc, "")
         self.assertEqual(tldr, "x")
-        self.assertEqual(heads.split(), ["H", "H2"])  # heading text only, markers gone
+        self.assertEqual(heads.split(), ["T", "H", "H2"])  # title and headings, markers gone
         self.assertEqual(body.split(), ["word", "word"])
         self.assertNotIn("##", body)
+
+    def test_preamble_survives_without_double_counting_fields(self):
+        text = (
+            "---\nname: hiddenmetadata\ndescription: descriptivetoken\n---\n"
+            "# titletoken\npreambletoken\n> **TL;DR:** summarytoken\n"
+            "> continuationtoken\n\n## sectiontoken\nbodytoken\n"
+        )
+        desc, tldr, heads, body = kbformat.split_fields(text)
+        self.assertEqual(desc, "descriptivetoken")
+        self.assertEqual(tldr, "summarytoken continuationtoken")
+        self.assertEqual(heads.split(), ["titletoken", "sectiontoken"])
+        self.assertEqual(body.split(), ["preambletoken", "bodytoken"])
+        joined = " ".join((desc, tldr, heads, body))
+        self.assertNotIn("hiddenmetadata", joined)
+        for token in ("descriptivetoken", "titletoken", "preambletoken", "summarytoken", "continuationtoken", "bodytoken"):
+            self.assertEqual(joined.count(token), 1, token)
 
 
 class StatusLine(unittest.TestCase):

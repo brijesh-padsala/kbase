@@ -1,53 +1,48 @@
-# Agent memory & context architecture (knowledge/ as the unified agent stack)
+# Agent memory and context architecture
 
-> **TL;DR:** `knowledge/` IS this project's agent memory and context system: a 4-tier memory hierarchy plus a dual loop (fast per-session retrieval, slow consolidation) implemented as plain files + git + CLI retrieval — `ksearch` for knowledge, `ripgrep`/`rg` for code, `rg` for literals. Deliberately excluded: memory servers (Letta/Zep-class), vector-first retrieval, and LLM-indexed knowledge graphs (GraphRAG/Cognee/graphify). Evaluating a memory or context-engineering tool? Read §5 before installing anything.
-> **Read when:** deciding where new knowledge should live; explaining or extending the KB design; evaluating a memory/context tool. **Skip when:** you need behavioral rules ([rules/](../rules/)) or commands ([practices/commands.md](../practices/commands.md)) — this page is the design map, not the rules.
+> **TL;DR:** Markdown and Git hold shared project knowledge. Small agent entry points route to current notes, bounded search returns cited evidence, and deliberate consolidation keeps it useful. Measure relevance and output size before adding a retrieval backend or memory service.
+> **Read when:** extending the KB or evaluating a memory/context tool. **Skip when:** you need [behavioral rules](../rules/agent-contract.md) or [commands](../practices/commands.md).
 
-**Baseline:** design/policy record (not code claims). Behavioral authority is [write-back-policy.md](../rules/write-back-policy.md) — when this page and a rule disagree, the rule wins and this page gets patched. Provenance: design distilled from a production trading-system KB (2026-09).
+**Baseline:** design policy, informed by a production project KB and primary-source research on 2026-09-22. The [write-back policy](../rules/write-back-policy.md) governs project facts; product documentation below describes capabilities, not locally benchmarked results.
 
-## 1. Design goals
+## Shared memory, thin adapters
 
-| Goal | How the design meets it |
-|---|---|
-| **Agent-agnostic** | Markdown + git + CLI is the only substrate every agent reads natively. No daemon, no service, no per-agent store; tool-specific wiring is quarantined in `agents/<name>/WIRING.md`. |
-| **Unified** | One source of truth for all agents, entered via [INDEX.md](../INDEX.md). Agent-native memory is forbidden by the [write-back policy](../rules/write-back-policy.md) — native stores may carry routing pointers only. |
-| **Token-cheap** | Agents retrieve excerpts, never whole files: `ksearch` returns ranked ~500-token excerpts with file pointers; `rg`/structural tools answer who-calls-what without reading bodies. The routing table in root `AGENTS.md` picks the cheapest tool per question type. |
+`knowledge/` is the reviewable source of truth. Root `AGENTS.md` and the required [INDEX](../INDEX.md) provide routing and critical policy; details are read when needed. Skill discovery exposes names/descriptions, with thin stubs pointing to canonical procedures. Keep project facts out of duplicate agent stores.
 
-## 2. The four memory tiers
+[AGENTS.md](https://agents.md/) and [Agent Skills](https://agentskills.io/specification) provide portable conventions, but discovery and instruction precedence depend on the harness. Verify the selected adapter in its actual client. Importing another instruction file can load it eagerly; an import is not automatically a token saving.
 
-The standard agent-memory hierarchy, mapped onto this repo:
+## Four memory tiers
 
-| Tier | Location | Authority |
+| Tier | Location | Use |
 |---|---|---|
-| **Working** (this session) | the agent's own context window; files pulled on demand via the routing table | root `AGENTS.md` "Search, don't read" |
-| **Episodic** (what happened) | [plans/](../plans/README.md) board + handoff artifacts; `plans-archive/` is history, never cited as current | plans board README |
-| **Semantic** (what's true) | [docs/](architecture.md) verified architecture + specs; [memory/operations.md](../memory/operations.md) operational facts | per-file verification baselines |
-| **Procedural** (how to act) | [rules/agent-contract.md](../rules/agent-contract.md) constraints; [practices/](../practices/commands.md) conventions | rules/ + practices/ |
+| Working | Current task context | Objective and just enough evidence to act |
+| Episodic | [Plans and handoffs](../plans/README.md) | Progress, ownership, decisions, next action; archives are history |
+| Semantic | [Architecture](architecture.md), [operations](../memory/operations.md), verified notes | Current facts with source and verification baseline |
+| Procedural | [Rules](../rules/agent-contract.md), [practices](../practices/commands.md), skills | Constraints and repeatable procedures |
 
-Every session starts at [INDEX.md](../INDEX.md); its "Where to look first" table is the memory router.
+**Fast loop:** route the question → retrieve relevant evidence → inspect cited source as needed → act. Use ksearch for knowledge, optional structural tools for code, and `rg` for literals.
 
-## 3. The dual loop
+**Consolidation loop:** record costly-to-rediscover facts with the code that taught them, recheck changed evidence, correct or remove stale notes, and evaluate retrieval through [kb-audit](../practices/skills/kb-audit.md). Critical rules do not decay because they are rarely queried. Archives preserve history without entering default retrieval.
 
-**Fast loop (per session):** INDEX.md → route by question type (`ksearch` / structural code query / `rg`) → act → write back per policy. Nothing enters context that retrieval didn't rank first.
+## Enforce output size; measure relevance
 
-**Slow loop (consolidation):** knowledge commits ride with the code that taught them; [hygiene](../rules/hygiene.md) removes stale material in the same commit; the periodic audit prunes and fixes retrieval vocabulary; lessons distill into [learning/](../learning/lessons-log.md). The slow loop is what keeps the fast loop's answers trustworthy.
+ksearch reads current files on each call, field-weights descriptions/TL;DRs above headings above body, and returns one cited passage per file. It caps successful stdout at 2,400 UTF-8 bytes by default, including serialization and source pointers. A result limit alone does not bound output. Budget omissions are explicit; `--max-bytes 0` is a deliberate unbounded read.
 
-## 4. Forgetting is deterministic, not decay
+The [evaluation guide](../practices/retrieval-evaluation.md) separates raw ranking from results visible within the budget. Use real questions, expected files, no-answer cases, and a held-out set. Diagnose missing knowledge, vocabulary mismatch, wrong rank, and budget omissions separately. A shorter irrelevant result is not an improvement.
 
-No Ebbinghaus-style fading. A memory must be either verified-current or explicitly pruned — never silently weakened: decay scoring cannot distinguish a live critical-path doc from an obsolete note. Mechanisms: the dated-record vs live distinction (README legend), verification baselines per file, and in-commit hygiene removal.
+Doctor reports local instruction/import sizes, required INDEX reading, and per-adapter skill metadata separately. Character-based token estimates are rough: actual tokenization, cached input, tool definitions, harness instructions, and repeated turns determine total cost. Neither the static inventory nor the starter fixture establishes end-to-end task savings.
 
-## 5. Deliberately excluded (evaluated — do not re-litigate without new evidence)
+These choices follow the just-in-time retrieval and minimal high-signal context principles in [Anthropic's context engineering guidance](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), and bounded tool output plus evaluation in its [tool design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents).
 
-| Excluded class | Examples | Why rejected |
+## Optional tools: adopt for a demonstrated gap
+
+| Approach | Useful capability | Adoption evidence needed |
 |---|---|---|
-| Memory servers | Letta/MemGPT, Zep | Agent-native memory by another name — forbidden by the write-back policy; adds a daemon, index staleness, and vendor lock-in |
-| LLM-indexed knowledge graphs | GraphRAG, Cognee, graphify | Enrichment ships repo content through external LLM APIs (egress); a second graph over docs+code becomes a stale second source of truth; no equivalents of deterministic commit-time gates |
-| Vector-first retrieval | embedding indexes | Unmeasured need: BM25 + field weights serves a curated KB; embeddings add a second index that can drift. Revisit only if the `_ksearch-log.tsv` zero-hit audit proves fuzzy-recall misses |
+| [QMD](https://github.com/tobi/qmd) | Local lexical/vector/hybrid retrieval and reranking | Held-out conceptual misses improved at equal output budgets; justify dependencies, index refresh and model cost |
+| [Letta MemFS](https://docs.letta.com/agent-sdk/memory) | Git-backed Markdown memory with pinned and on-demand files | A resident-agent workflow needs its runtime; shared project facts stay exportable and reviewable |
+| [Mem0](https://github.com/mem0ai/mem0) | Extraction and retrieval of durable application/user facts | Fact correction and project scoping work; account for extraction, inference, embedding and storage costs |
+| [Graphiti](https://github.com/getzep/graphiti) | Temporal relationships and episode provenance | Repeated relationship/time queries need a graph; verify evidence invalidation and ingestion freshness |
 
-**Adoption bar for any future memory/context tool:** it must beat "files + git + CLI" on agent-agnosticism AND token cost AND add a workflow gate verb. Otherwise it may exist only as a derived, regenerable VIEW — never as the memory itself.
+These are optional experiments, not default dependencies or blanket rejections. Local model/provider configurations vary; inspect a pinned version's actual network behavior and telemetry rather than inferring it from a product category.
 
-## 6. Token economy & retrieval-quality measurement
-
-- The TL;DR-first file format is load-bearing: ksearch field-weights TL;DR/description above headings above body. A file without a TL;DR is both harder to retrieve and more expensive to read.
-- ksearch logs every query with its top hit (`knowledge/_ksearch-log.tsv`). Periodically auditing zero/weak-hit queries is this system's substitute for embeddings: fix misses by adding the missing vocabulary to the relevant TL;DRs.
-- If that audit ever proves fuzzy-conceptual misses BM25 cannot serve, the sanctioned upgrade is LOCAL embeddings as a fallback layer inside ksearch (index regenerable from files, no external API) — not a memory service.
+Any derived index must be regenerable from canonical notes, scoped to the project, and tested after edits, deletions, renames, and branch/worktree changes. Compare against bounded lexical retrieval on the same frozen corpus; measure relevance, task correctness, output cost, latency, setup, and refresh effort. Warn or fall back to live files when stale. Do not turn retrieved or extracted text into a higher-priority instruction source.
