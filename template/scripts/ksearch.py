@@ -4,11 +4,12 @@
 Returns ranked excerpts with file pointers, so agents read ~500 tokens
 instead of whole files. BM25-style scoring with per-field weights (description/TL;DR
 above headings above body) so files that are ABOUT a term outrank incidental mentions.
-Python standard library only.
+The note format and current-file scope come from kbformat (shared with
+knowledge-gate — one declaration, no drift). Python standard library only.
 
 Usage:
   ksearch <query> [--json] [--limit N] [--dir SUBDIR]
-  ksearch <query> --include-archive  # opt into historical records
+  ksearch <query> --include-archive  # opt into archived/artifact material
 
 KB location: $KB_ROOT, else <script_dir>/../knowledge.
 Exit codes: 0 = hits, 1 = no hits.
@@ -22,11 +23,9 @@ import re
 import sys
 from collections import Counter
 
-KB_ROOT = os.environ.get(
-    "KB_ROOT",
-    os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "knowledge"),
-)
-KB_ROOT = os.path.realpath(KB_ROOT)
+import kbformat
+from kbformat import split_fields
+
 STOPWORDS = {
     "the",
     "a",
@@ -84,109 +83,39 @@ def tokenize(text: str):
     ]
 
 
-FRONTMATTER_DESC_RE = re.compile(r"^description:\s*(.*)$")
-TLDR_RE = re.compile(r"^\s*(?:>\s*)?\*\*TL;DR\b\*{0,2}:?\s*(.*)$")
-HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
-TLDR_SCAN_LINES = 10  # house style keeps the TL;DR blockquote near the top
+def resolve_kb_root() -> str:
+    """KB location: $KB_ROOT, else <script_dir>/../knowledge. Read per call,
+    so tests and embedders can point ksearch at any knowledge tree."""
+    root = os.environ.get(
+        "KB_ROOT",
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "knowledge"),
+    )
+    return os.path.realpath(root)
 
 
-def split_fields(text: str):
-    """Split a knowledge file into weighted searchable fields.
-
-    Returns (description, tldr, headings, body):
-      description — leading YAML frontmatter `description:` value ("" when absent)
-      tldr        — the `> **TL;DR:** ...` blockquote line(s) near the top ("" when absent)
-      headings    — all markdown heading text, newline-joined
-      body        — every remaining line
-    Each line lands in exactly one field, so no token is double-counted.
-    """
-    lines = text.splitlines()
-    start = 0
-    desc = ""
-    if lines and lines[0].strip() == "---":
-        close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-        if close is not None:
-            for ln in lines[1:close]:
-                m = FRONTMATTER_DESC_RE.match(ln)
-                if m:
-                    val = m.group(1).strip()
-                    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
-                        val = val[1:-1].strip()
-                    desc = val
-                    break
-            start = close + 1
-
-    tldr = ""
-    for i in range(start, min(start + TLDR_SCAN_LINES, len(lines))):
-        m = TLDR_RE.match(lines[i])
-        if m:
-            parts = [m.group(1).strip().strip("*:").strip()]
-            j = i + 1  # continuation blockquote lines extend the TL;DR
-            while j < len(lines) and lines[j].lstrip().startswith(">"):
-                parts.append(lines[j].lstrip().lstrip(">").strip())
-                j += 1
-            tldr = " ".join(p for p in parts if p)
-            start = j
-            break
-
-    headings, body = [], []
-    for ln in lines[start:]:
-        m = HEADING_RE.match(ln)
-        if m:
-            headings.append(m.group(1).strip())
-        else:
-            body.append(ln)
-    return desc, tldr, "\n".join(headings), "\n".join(body)
-
-
-def list_md_files(subdir: str | None, include_archive: bool = False):
-    base = KB_ROOT if not subdir else os.path.join(KB_ROOT, subdir)
+def list_md_files(subdir: str | None, include_archive: bool = False, root: str | None = None):
+    root = root if root is not None else resolve_kb_root()
+    base = root if not subdir else os.path.join(root, subdir)
     if not include_archive and any(
-        part == "archive" or part.endswith("-archive")
-        for part in os.path.relpath(base, KB_ROOT).split(os.sep)
+        kbformat.is_excluded_dir(part)
+        for part in os.path.relpath(base, root).split(os.sep)
     ):
         return []
     files = []
-    for root, dirs, names in os.walk(base):
+    for dirpath, dirs, names in os.walk(base):
         dirs[:] = [
             d
             for d in dirs
             if not d.startswith(".")
-            and (include_archive or not (d == "archive" or d.endswith("-archive")))
+            and (include_archive or not kbformat.is_excluded_dir(d))
         ]
         for n in names:
             if n.endswith(".md") and not n.startswith("_"):
-                files.append(os.path.join(root, n))
+                files.append(os.path.join(dirpath, n))
     return sorted(files)
 
 
-def best_excerpt(text: str, terms: list[str], width: int = 320) -> str:
-    """Return the line-window with the highest term density."""
-    lines = text.splitlines()
-    best_score, best_i = -1.0, 0
-    for i, line in enumerate(lines):
-        low = line.lower()
-        score = sum(low.count(t) for t in terms)
-        if score > best_score:
-            best_score, best_i = score, i
-    lo = max(0, best_i - 2)
-    hi = min(len(lines), best_i + 4)
-    out = " ⏎ ".join(line.strip() for line in lines[lo:hi] if line.strip())
-    return out[: width * 2]
-
-
-def search(
-    query: str, limit: int, subdir: str | None, as_json: bool, include_archive: bool = False
-):
-    terms = list(dict.fromkeys(tokenize(query)))
-    if not terms:
-        print("query has no searchable terms", file=sys.stderr)
-        return 1
-    files = list_md_files(subdir, include_archive)
-    if not files:
-        print(f"no .md files under {KB_ROOT}", file=sys.stderr)
-        return 1
-
+def read_docs(files: list[str]) -> dict[str, str]:
     docs = {}
     for f in files:
         try:
@@ -194,10 +123,19 @@ def search(
                 docs[f] = fh.read()
         except OSError:
             continue
+    return docs
 
-    # BM25 scoring over weighted fields: term frequency counts per field
-    # (description / TL;DR / headings / body) and each field contributes its
-    # weight times its count, so about-ness beats incidental mention.
+
+def score(terms: list[str], docs: dict[str, str]):
+    """BM25 over kbformat-weighted fields.
+
+    Pure: given search terms and {path: text}, return (ranked, descriptions)
+    where ranked is [(score, path)] best-first and descriptions carries each
+    file's frontmatter description ("" when absent). Term frequency counts
+    per field (description / TL;DR / headings / body) and each field
+    contributes its weight times its count, so about-ness beats incidental
+    mention; a term naming the file boosts its score.
+    """
     n = len(docs)
     tf = {}
     descs = {}
@@ -242,21 +180,92 @@ def search(
             scored.append((s, f))
 
     scored.sort(reverse=True)
+    return scored, descs
+
+
+def best_excerpt(text: str, terms: list[str], width: int = 320) -> str:
+    """Return the line-window with the highest term density."""
+    lines = text.splitlines()
+    best_score, best_i = -1.0, 0
+    for i, line in enumerate(lines):
+        low = line.lower()
+        score = sum(low.count(t) for t in terms)
+        if score > best_score:
+            best_score, best_i = score, i
+    lo = max(0, best_i - 2)
+    hi = min(len(lines), best_i + 4)
+    out = " ⏎ ".join(line.strip() for line in lines[lo:hi] if line.strip())
+    return out[: width * 2]
+
+
+def log_query(query: str, scored: list, root: str):
+    """Usage logging for the KB evaluation zero-hit audit (rules/hygiene.md):
+    timestamp, query, top hit, hit count."""
+    import datetime
+
+    logf = os.path.join(root, "_ksearch-log.tsv")
+    with open(logf, "a", encoding="utf-8") as fh:
+        top = os.path.relpath(scored[0][1], root) if scored else "-"
+        fh.write(
+            f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{' '.join(query.split())}\t{top}\t{len(scored)}\n"
+        )
+
+
+def render_human(scored: list, descs: dict, docs: dict, terms: list[str], n: int, root: str):
+    print(f"top {len(scored)} of {n} files | KB: {root}")
+    for s, f in scored:
+        rel = os.path.relpath(f, root)
+        print(f"\n{s:.2f}  {rel}")
+        if descs[f]:
+            print(f"      {descs[f]}")  # description ahead of the computed excerpt
+        print(f"      {best_excerpt(docs[f], terms)}")
+    print("\nread less: ksearch again narrower, or read only the cited section")
+
+
+def render_json(scored: list, descs: dict, docs: dict, terms: list[str], root: str):
+    print(
+        json.dumps(
+            [
+                {
+                    "score": round(s, 3),
+                    "file": os.path.relpath(f, root),
+                    "description": descs[f] or None,
+                    "excerpt": best_excerpt(docs[f], terms),
+                }
+                for s, f in scored
+            ],
+            indent=1,
+        )
+    )
+
+
+def search(
+    query: str,
+    limit: int,
+    subdir: str | None,
+    as_json: bool,
+    include_archive: bool = False,
+    root: str | None = None,
+):
+    root = root if root is not None else resolve_kb_root()
+    terms = list(dict.fromkeys(tokenize(query)))
+    if not terms:
+        print("query has no searchable terms", file=sys.stderr)
+        return 1
+    files = list_md_files(subdir, include_archive, root)
+    if not files:
+        print(f"no .md files under {root}", file=sys.stderr)
+        return 1
+
+    docs = read_docs(files)
+    scored, descs = score(terms, docs)
     scored = scored[:limit]
 
-    # usage logging for KB evaluation (zero-hit audit — see rules/hygiene.md):
-    # timestamp, query, top hit, hit count. Logged BEFORE the no-match return
-    # so zero-hit queries are auditable too.
+    # usage logging for KB evaluation (zero-hit audit — see rules/hygiene.md).
+    # Logged BEFORE the no-match return so zero-hit queries are auditable too.
     if not as_json and not os.environ.get("KSEARCH_NO_LOG"):
         try:
-            import datetime
-
-            logf = os.path.join(KB_ROOT, "_ksearch-log.tsv")
-            with open(logf, "a", encoding="utf-8") as fh:
-                top = os.path.relpath(scored[0][1], KB_ROOT) if scored else "-"
-                fh.write(
-                    f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{' '.join(query.split())}\t{top}\t{len(scored)}\n"
-                )
+            log_query(query, scored, root)
         except OSError:
             pass
 
@@ -265,30 +274,9 @@ def search(
         return 1
 
     if as_json:
-        print(
-            json.dumps(
-                [
-                    {
-                        "score": round(s, 3),
-                        "file": os.path.relpath(f, KB_ROOT),
-                        "description": descs[f] or None,
-                        "excerpt": best_excerpt(docs[f], terms),
-                    }
-                    for s, f in scored
-                ],
-                indent=1,
-            )
-        )
-        return 0
-
-    print(f"top {len(scored)} of {n} files | KB: {KB_ROOT}")
-    for s, f in scored:
-        rel = os.path.relpath(f, KB_ROOT)
-        print(f"\n{s:.2f}  {rel}")
-        if descs[f]:
-            print(f"      {descs[f]}")  # description ahead of the computed excerpt
-        print(f"      {best_excerpt(docs[f], terms)}")
-    print("\nread less: ksearch again narrower, or read only the cited section")
+        render_json(scored, descs, docs, terms, root)
+    else:
+        render_human(scored, descs, docs, terms, len(docs), root)
     return 0
 
 
@@ -299,7 +287,7 @@ def main():
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--dir", help="restrict to knowledge/ subdir (e.g. docs, rules)")
     ap.add_argument(
-        "--include-archive", action="store_true", help="include historical archive directories"
+        "--include-archive", action="store_true", help="include archived and artifacts directories"
     )
     a = ap.parse_args()
     if a.limit < 1:

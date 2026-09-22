@@ -6,6 +6,7 @@
 
 ```bash
 TODO(project)   # lint
+TODO(project)   # typecheck (or explain why not applicable)
 TODO(project)   # tests
 TODO(project)   # build / run locally
 TODO(project)   # apply migrations / deploy step that must never be skipped
@@ -17,6 +18,7 @@ TODO(project)   # apply migrations / deploy step that must never be skipped
 python3 scripts/ksearch.py "<query>"          # ranked excerpts + file pointers (~500 tokens, not whole files)
 python3 scripts/ksearch.py "<query>" --dir rules   # narrow to a subdir
 python3 scripts/ksearch.py "<query>" --json   # machine-readable
+python3 scripts/ksearch.py "<query>" --include-archive  # archived/artifact material too
 ```
 
 Stdlib-only; reads `knowledge/` (override with `KB_ROOT`). Every query is logged to `knowledge/_ksearch-log.tsv` for the zero-hit audit ([hygiene.md](../rules/hygiene.md)).
@@ -28,17 +30,45 @@ rg "<literal>"                       # string literals, configs, non-code files
 ripwire <dir> --for="<task>"         # ranked signatures for a task (if installed)
 ripwire <dir> --callers=<SYM>        # who calls SYM
 ripwire <dir> --impact=<SYM>         # transitive blast radius
+ripwire <dir> --uses=<SYM>           # static read/write and reference sites
+ripwire <dir> --exemplar="<helper>" # look for an existing implementation before adding one
+ripwire <dir> --quality-delta       # inspect changed-code quality signals before completion
+ripwire <dir> --test-gate           # static test-impact/coverage guidance; DOES NOT run tests
 ```
 
-Prefer ripwire over grep for who-calls-what, blast radius, structural discovery, reuse hotspots. Fall back to `rg` for literals and non-code files.
+Prefer ripwire for structural discovery, impact, uses, and reuse candidates. It is optional: check `command -v ripwire` and `ripwire --help` for the installed capabilities; use targeted `rg` and source reads when unavailable. Static analysis can miss dynamic dispatch and generated code, so verify relevant source and execute the project's actual lint/typecheck/tests. `--test-gate` is guidance, not test execution or proof that tests pass. Cite source files rather than a generated map.
+
+Choose the relevant source directory for `<dir>`. Init accepts repeated `--source-dir DIR` options; otherwise it detects conventional `src`, `lib`, `app`, or `frontend` directories, falling back to the repository root. Check these recorded choices against the task instead of treating them as an exhaustive code map.
 
 ## Skills
 
-Two skill procedures ship with the KB — canonical content in [skills/](skills/README.md), thin per-harness stubs in `.agents/skills/`:
+Canonical procedures live in [skills/](skills/README.md); [agent adapters](../agents/README.md) provide thin discovery stubs:
 
 - **distill** — the bootstrap distillation pass (SCAFFOLDED → VERIFIED). Invoked via the stub, or by following [skills/distill.md](skills/distill.md) directly.
 - **kb-audit** — the consolidation pass (query-log review, label spot-check, reference audit).
+- **kb-handoff** — save or resume work in the active plan, including ownership and test evidence.
+- **Optional workflow discovery (`--workflow` at init):** `kb-plan`, `kb-implement`, `kb-review`, `kb-board`. Their procedures remain readable even without discovery stubs.
 
 ## Knowledge gate (pre-commit)
 
-`scripts/knowledge-gate.py` validates staged knowledge changes (TL;DR-at-birth, links, plan Status, anti-truncation, KB status-line rules). Wiring snippet: `.pre-commit-knowledge-gate-snippet.yaml` at repo root after `kbase-init`.
+```bash
+python3 scripts/knowledge-gate.py          # staged changes; normal pre-commit use
+python3 scripts/knowledge-gate.py --all    # full current working tree; useful in CI and audits
+python3 scripts/kbase-doctor.py            # installation, integration, and KB diagnostics
+python3 scripts/kbase-doctor.py --strict   # warnings also produce a nonzero exit
+python3 scripts/kbase-doctor.py --json     # machine-readable diagnostics
+/path/to/kbase/bin/kbase doctor .          # same doctor from the scaffold checkout
+```
+
+The staged gate validates the commit's knowledge changes without consulting unrelated unstaged edits. The full-tree check validates the current checkout, including changes not staged. It does not replace the staged anti-truncation check. The installer creates `.pre-commit-config.yaml` or provides a merge snippet when a config already exists; activate the hook with `pre-commit install` after installing pre-commit through the project's tooling.
+
+Doctor fails on structural errors. Unfilled project markers, an inactive hook, or unavailable optional ripwire produce warnings; use `--strict` when those should fail an onboarding or CI check.
+
+## Updating generated integrations
+
+```bash
+/path/to/kbase/bin/kbase update .          # preview proposed updates and conflicts
+/path/to/kbase/bin/kbase update . --apply  # update eligible scripts and discovery stubs
+```
+
+`.kbase.json` records generated files and their installed content hashes. The updater applies only when every managed path is unchanged since installation or already matches the update; modified, deleted, or symlinked paths block application for review. It updates generated scripts and discovery stubs while preserving canonical knowledge, agent routers, and project policies. Use doctor after an update; a missing manifest requires reconciliation rather than a forced reinstall.

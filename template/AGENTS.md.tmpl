@@ -12,8 +12,14 @@ Route by question type BEFORE reaching for Grep/Read:
 | Question about | Tool |
 |---|---|
 | Knowledge/rules/architecture (`knowledge/` content) | `python3 scripts/ksearch.py "<query>"` — ranked excerpts + file pointers; read the TL;DR before the full file |
-| Code: who-calls-what, blast radius, where to start | `ripwire <source-dir> --for="<task>"` / `--callers=<SYM>` / `--impact=<SYM>` (if installed) — signatures-not-bodies; else targeted `rg` + read |
+| Code: where to start, callers, blast radius, uses | `ripwire <source-dir> --for="<task>"` / `--callers=<SYM>` / `--impact=<SYM>` / `--uses=<SYM>` if installed; else targeted `rg` + read |
 | String literals, configs, non-code files | `rg` |
+
+Before adding a helper or completing work, follow the [tool and verification commands](knowledge/practices/commands.md). Ripwire is static evidence; run the project's actual checks.
+
+## Work across sessions
+
+Check the [plans board](knowledge/plans/README.md) for ownership before changing files. To save or resume work, follow [kb-handoff](knowledge/practices/skills/kb-handoff.md). Other [skills](knowledge/practices/skills/README.md) are available as needed; their discovery stubs share these canonical procedures.
 
 ## Write-back policy — knowledge goes HERE, never to your native memory
 

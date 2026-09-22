@@ -2,6 +2,8 @@
 
 > **TL;DR:** Shared queue of plans/specs/proposals with ownership and status. Any agent can pick up any plan — check the board before starting.
 
+Create plans from [artifacts/plan-template.md](artifacts/plan-template.md). Use [kb-plan](../practices/skills/kb-plan.md) to prepare one, [kb-board](../practices/skills/kb-board.md) to reconcile the queue, and [kb-handoff](../practices/skills/kb-handoff.md) to save or resume work.
+
 ## Board
 
 | # | Plan | Status | Owner |
@@ -16,3 +18,4 @@
 4. Plans land here ONLY — never in an agent's native plans dir ([write-back-policy.md](../rules/write-back-policy.md)).
 5. DONE/ABANDONED plans move to `plans-archive/` (history; never cite as current).
 6. Claim a plan by setting Owner before starting work; update Status as it moves.
+7. Record review readiness, findings, and pending verification in the plan narrative. Use the six states above; DONE requires acceptance criteria and required checks/review to be satisfied. A pause is not automatically BLOCKED.

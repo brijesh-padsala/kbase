@@ -18,11 +18,11 @@ Rules that apply regardless of toolchain:
 1. Lint + related tests pass before anything is called done. A failing gate is reported honestly, never worked around.
 2. Generated files are regenerated, not hand-edited; their generator is named next to them.
 3. A lone full-suite red gets rerun in isolation and classified (wall-clock budget vs logic) before being treated as a regression — record flakes honestly in gate evidence.
-4. `scripts/knowledge-gate.py` must pass for any commit touching `knowledge/` (wired via pre-commit; see `practices/commands.md`).
+4. `python3 scripts/knowledge-gate.py` must pass for any commit touching `knowledge/` (staged overlay, wired via pre-commit). Run `python3 scripts/knowledge-gate.py --all` for current-tree validation; see [commands](../practices/commands.md).
 
 ## Code-search routing (token gate)
 
-Before grep-and-read on a code-structure question: `ripwire <dir> --for="<task>"` (or targeted `rg`). Reading whole files to answer who-calls-what is a gate failure of economy, not a style nit.
+Follow the [structural and reuse routes](../practices/commands.md) before broad source reads or adding helpers. If ripwire is available, inspect `--quality-delta` and `--test-gate` before completing code changes. These are static signals: `--test-gate` does not run tests, and successful analysis does not replace actual lint/typecheck/test results.
 
 ## Knowledge gates
 

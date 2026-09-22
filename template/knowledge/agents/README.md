@@ -2,6 +2,16 @@
 
 > **TL;DR:** Tool-specific connection syntax lives in `agents/<name>/WIRING.md` — one file per agent tool — and nowhere else.
 
+## Shipped adapters
+
+Init defaults to `--agents codex,claude`; select `--agents codex`, `--agents claude`, or `--agents none` to change discovery wiring. Codex uses `.agents/skills/<name>/SKILL.md`. Claude uses `.claude/skills/<name>/SKILL.md` and a `CLAUDE.md` import of `@AGENTS.md`. Existing entry-point instructions are preserved; merge any generated router guidance and verify the selected harness can discover the stubs.
+
+Both adapters point to the same [canonical procedures](../practices/skills/README.md) and root `AGENTS.md` router. Core skills are distill, kb-audit, and kb-handoff; `--workflow` adds discovery for kb-plan, kb-implement, kb-review, and kb-board. The procedures are always present in the KB even when no adapter is selected.
+
+Run `python3 scripts/kbase-doctor.py` after installation or a wiring change. Adapter paths are connection details; they are not additional stores for project facts.
+
+## Additional agents
+
 When configuring a new agent tool (claude, codex, cursor, factory, gstack, hermes, …):
 
 1. Create `agents/<name>/WIRING.md` describing how THAT tool connects to this KB: which entry-point file it reads natively (AGENTS.md / CLAUDE.md / .cursorrules / …), how it should invoke `scripts/ksearch.py`, and any tool-specific routing.
@@ -10,7 +20,7 @@ When configuring a new agent tool (claude, codex, cursor, factory, gstack, herme
 
 ## The librarian role (read-only subagent)
 
-The one subagent role this KB design wants: a **librarian** that answers "what does the KB say about X?" in its own context and returns only a cited summary — the main thread never reads the files, which is where subagents beat inline skills on tokens.
+A **librarian** answers "what does the KB say about X?" in its own context and returns a cited summary. Use it when retrieval is an independent subtask; direct search is sufficient for a small lookup.
 
 Role contract (implement per harness in that harness's WIRING.md / agent config):
 

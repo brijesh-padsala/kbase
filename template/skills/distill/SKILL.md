@@ -1,6 +1,6 @@
 ---
 name: distill
-description: Execute the KB bootstrap distillation pass — verify the evidence pack, write architecture/pitfalls/operations with per-claim ✅/❓ labels, fill TODO(project) markers, then flip KB status to VERIFIED and delete the bootstrap brief in one gate-checked commit. Use when the KB status is SCAFFOLDED or knowledge/_bootstrap-brief.md exists.
+description: Run the KB bootstrap distillation pass per knowledge/practices/skills/distill.md. Invoke when KB status is SCAFFOLDED or knowledge/_bootstrap-brief.md exists; skip when already VERIFIED.
 ---
 
 # distill

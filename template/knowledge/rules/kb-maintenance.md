@@ -12,7 +12,11 @@ Every knowledge file opens with:
 > **Read when:** the situations this file serves. **Skip when:** where to go instead.
 ```
 
-`ksearch` field-weights TL;DR/description above headings above body — a file without a TL;DR is both harder to retrieve and more expensive to read. Keep the TL;DR vocabulary aligned with the words people actually query (audited via `_ksearch-log.tsv`, see [hygiene.md](hygiene.md)).
+`ksearch` field-weights TL;DR/description above headings above body — a file without a TL;DR is both harder to retrieve and more expensive to read. The TL;DR must sit within the first 10 lines (`scripts/kbformat.py` scans and the gate enforces the same window). Keep the TL;DR vocabulary aligned with the words people actually query (audited via `_ksearch-log.tsv`, see [hygiene.md](hygiene.md)).
+
+## Scope — what counts as a current note
+
+`ksearch` indexes and `scripts/knowledge-gate.py` polices the same scope, declared once in `scripts/kbformat.py`: `knowledge/**/*.md` excluding `archive/` and `*-archive/` directories, `plans/artifacts/` (supporting material, not notes), and `_`-prefixed files (working files like the bootstrap brief and the ksearch log). `ksearch --include-archive` widens *retrieval* to archived and artifact material; the enforcement scope never widens.
 
 ## Labels and baselines
 
@@ -29,4 +33,4 @@ Every knowledge file opens with:
 
 ## Status line
 
-The KB carries one status line (README + INDEX, must agree): `SCAFFOLDED @ <commit>` or `VERIFIED @ <commit>`. Flipping to VERIFIED requires the distillation pass done and names the flip commit; the gate verifies the named commit exists.
+The KB carries one status line (README + INDEX, must agree): `SCAFFOLDED @ <commit>` or `VERIFIED @ <commit>`. Flipping to VERIFIED requires the distillation pass done and names an existing commit verified against; the gate verifies that commit exists. Keep the flip and bootstrap-brief deletion in the same change.

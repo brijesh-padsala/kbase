@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """kbase-init — scaffold an agent-agnostic knowledge base into a git repo.
 
-Creates knowledge/ (structure + policy templates), scripts/ (ksearch +
-knowledge-gate), and a root AGENTS.md router. Two bootstrap modes:
+Creates knowledge/ (structure + policy templates), scripts/ (search, gate,
+doctor), agent discovery adapters, and a root AGENTS.md router. Two bootstrap modes:
 
   existing    repo has real code + history → KB status SCAFFOLDED and a
               knowledge/_bootstrap-brief.md is generated: a mechanical
@@ -12,16 +12,19 @@ knowledge-gate), and a root AGENTS.md router. Two bootstrap modes:
               the write-back policy grows it from there.
 
 Usage:
-  kbase-init [--mode auto|existing|greenfield] [--force] [TARGET_DIR]   # default .
+  kbase-init [--mode auto|existing|greenfield] [--agents codex,claude|none]
+             [--workflow] [--source-dir DIR] [--force] [TARGET_DIR]
 
 Python 3.10+, standard library only.
 """
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -29,6 +32,16 @@ from collections import Counter
 from pathlib import Path
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "template"
+VERSION_FILE = TEMPLATE_DIR.parent / "VERSION"
+SCRIPTS = ("kbformat.py", "ksearch.py", "knowledge-gate.py", "kbase-doctor.py")
+AGENT_DIRS = {"codex": ".agents", "claude": ".claude"}
+CORE_SKILLS = ("distill", "kb-audit", "kb-handoff")
+WORKFLOW_SKILLS = ("kb-plan", "kb-implement", "kb-review", "kb-board")
+
+# The status-line grammar the gate parses lives in the template's kbformat;
+# import it so the writer and the reader share one declaration.
+sys.path.insert(0, str(TEMPLATE_DIR / "scripts"))
+import kbformat  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # mode detection + evidence pack constants
@@ -63,9 +76,8 @@ KNOWN_RS = {
 }
 TEST_BASES = re.compile(r"(^test_|_test\.|\.spec\.|\.test\.|(^|/)conftest\.py$)")
 ENTRY_CANDIDATES = [
-    "main.py", "app.py", "manage.py", "src/main.py", "src/app.py",
-    "src/main.rs", "src/lib.rs", "cmd", "main.go", "index.ts", "src/index.ts",
-    "index.js", "server.js", "app.ts", "Program.cs",
+    "main.py", "app.py", "manage.py", "src/main.rs", "src/lib.rs",
+    "main.go", "index.ts", "index.js", "server.js", "app.ts", "Program.cs",
 ]
 
 
@@ -95,10 +107,7 @@ def walk_source(root: Path):
                 tests += 1
         rel = os.path.relpath(dirpath, root)
         for cand in ENTRY_CANDIDATES:
-            if os.path.exists(os.path.join(dirpath, cand)) and cand in (
-                "main.py", "app.py", "manage.py", "src/main.rs", "src/lib.rs",
-                "main.go", "index.ts", "index.js", "server.js", "app.ts", "Program.cs",
-            ) and rel in (".", "src", "cmd"):
+            if os.path.exists(os.path.join(dirpath, cand)) and rel in (".", "src"):
                 entries.append(os.path.normpath(os.path.join(rel, cand)))
     return stats, tests, sorted(set(entries))
 
@@ -220,29 +229,19 @@ def build_brief(project, baseline, date, root: Path, pre_stats):
 
 ## Your job
 
-Turn the evidence pack below into a VERIFIED knowledge base. You are reading code and
-history, labeling every claim, and flipping the status line. Work from this checklist:
+Turn the evidence pack below into a VERIFIED knowledge base. The procedure is canonical
+and already in this repo: **`knowledge/practices/skills/distill.md`** — follow its
+Steps 1–7 and Rules of engagement; the evidence pack below is the input it works from.
+The non-negotiables:
 
-1. **Verify the evidence pack** — it is mechanical and can be wrong. Confirm anything you
-   build on with the source (`rg`, or `ripwire --for` if installed). Fix wrong lines in
-   your head, not by trusting them.
-2. **Write `knowledge/docs/architecture.md`** — stack tiers, how components connect, data
-   flow, entry points. Every claim ✅ with file evidence (`path:line`) or ❓.
-3. **Write `knowledge/learning/pitfalls.md`** — from git themes below (what breaks
-   repeatedly?) and code reading. Same labels.
-4. **Write `knowledge/memory/operations.md`** — environments, endpoints, run steps that
-   are verifiable from configs. Never inline secrets; ❓ anything runtime you can't check.
-5. **Fill every `TODO(project)` and `TODO(distillation)` marker**: `rg -n 'TODO\\((project|distillation)\\)' knowledge/`
-   (quality-gates commands, boundaries tiers, hygiene audit cadence).
-6. **Add the first lessons** to `knowledge/learning/lessons-log.md` if history taught any.
-7. **Flip and delete, in ONE commit**: set the KB status line in `knowledge/README.md`
-   AND `knowledge/INDEX.md` to `VERIFIED @ <commit-you-verified-against> ({date})`,
-   delete this brief file, commit as `knowledge: distillation pass — KB VERIFIED`.
-   `scripts/knowledge-gate.py` verifies the named commit exists and that VERIFIED and
-   the brief never coexist.
-
-**Rules of engagement:** TL;DR-first on every file (ksearch ranks on it). Prefer deleting
-an unverifiable claim over guessing. Do not invent. Dated/incident material keeps its date.
+- Verify every evidence line against the source before building on it (the pack is
+  mechanical and can be wrong).
+- Write `docs/architecture.md`, `learning/pitfalls.md`, `memory/operations.md` with
+  per-claim ✅/❓ labels; fill every `TODO(project)` / `TODO(distillation)` marker.
+- Flip the status line in `knowledge/README.md` AND `knowledge/INDEX.md` to
+  `VERIFIED @ <commit>` and delete this brief — in ONE commit.
+  `scripts/knowledge-gate.py` checks the flip: the named commit must exist, and VERIFIED
+  and the brief can never coexist.
 
 ## Evidence pack (mechanical — verify before building on it)
 
@@ -282,57 +281,106 @@ def render(text: str, values: dict) -> str:
     return text
 
 
+def selected_agents(value):
+    """Parse a stable, duplicate-free list of supported discovery adapters."""
+    if value == "none":
+        return []
+    agents = value.split(",")
+    if not agents or any(agent not in AGENT_DIRS for agent in agents):
+        raise argparse.ArgumentTypeError("use codex, claude, codex,claude, or none")
+    return list(dict.fromkeys(agents))
+
+
+def source_roots(root, requested):
+    """Keep source paths relative to the repository and inside its boundary."""
+    candidates = requested or [p for p in ("src", "lib", "app", "frontend") if (root / p).is_dir()] or ["."]
+    result = []
+    for value in candidates:
+        path = Path(value)
+        resolved = (root / path).resolve()
+        if path.is_absolute() or not resolved.is_relative_to(root) or not resolved.is_dir():
+            raise ValueError(f"--source-dir must name an existing directory inside the repo: {value}")
+        rel = resolved.relative_to(root).as_posix()
+        if rel not in result:
+            result.append(rel)
+    return result
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def check_destination(root, relative):
+    """Managed destinations use regular files and directories within the repo."""
+    destination = root / relative
+    if not destination.resolve().is_relative_to(root):
+        raise ValueError(f"destination escapes the repo: {relative}")
+    if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+        raise ValueError(f"destination is not a regular file: {relative}")
+    for parent in destination.parents:
+        if parent == root:
+            break
+        if parent.is_symlink():
+            raise ValueError(f"destination parent is a symlink: {parent.relative_to(root)}")
+        if parent.exists() and not parent.is_dir():
+            raise ValueError(f"destination parent is not a directory: {parent.relative_to(root)}")
+    return destination
+
+
 def main():
     ap = argparse.ArgumentParser(prog="kbase-init")
     ap.add_argument("target", nargs="?", default=".", help="repo to scaffold (default: cwd)")
     ap.add_argument("--mode", choices=["auto", "existing", "greenfield"], default="auto")
-    ap.add_argument("--force", action="store_true", help="overwrite an existing knowledge/")
+    ap.add_argument("--force", action="store_true", help="overwrite existing template files (review changes first)")
+    ap.add_argument("--agents", type=selected_agents, default=selected_agents("codex,claude"),
+                    help="discovery adapters: codex,claude (default), codex, claude, or none")
+    ap.add_argument("--workflow", action="store_true", help="also install plan, implement, review, and board skill adapters")
+    ap.add_argument("--source-dir", action="append", help="existing repo-relative source directory; repeat for multiple roots")
     a = ap.parse_args()
 
     target = Path(a.target).resolve()
     if not target.is_dir():
         ap.error(f"{target} is not a directory")
     try:
-        root = Path(git(target, "rev-parse", "--show-toplevel").strip())
+        root = Path(git(target, "rev-parse", "--show-toplevel").strip()).resolve()
     except subprocess.CalledProcessError:
         ap.error(f"{target} is not a git repo — git init and make the first commit first")
-    if subprocess.run(  # noqa: S603
-        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"],  # noqa: S607
+    if subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"],
         capture_output=True,
     ).returncode != 0:
         ap.error("repo has no commits — make the first commit first (the KB needs a baseline)")
-
     if (root / "knowledge").exists() and not a.force:
         ap.error("knowledge/ already exists (use --force to overwrite template files)")
+    try:
+        roots = source_roots(root, a.source_dir)
+    except ValueError as exc:
+        ap.error(str(exc))
 
-    # --- mode detection
-    stats, _, _ = walk_source(root)
+    # Gather evidence before writing, so the installed scripts do not affect it.
+    pre_stats = walk_source(root)
+    stats, _, _ = pre_stats
     src_files = sum(v["files"] for v in stats.values())
     commits = int(git_themes(root)["total"] or 0)
     mode = a.mode
     if mode == "auto":
         mode = "existing" if src_files >= 25 and commits >= 15 else "greenfield"
-    # Evidence gathered BEFORE scaffolding so kbase's own scripts never
-    # contaminate the project stats.
-    pre_stats = walk_source(root)
-    print(f"[kbase] target   : {root}")
-    print(f"[kbase] mode     : {mode} (auto-detected from {src_files} source files, "
-          f"{commits} commits — override with --mode)")
-
-    # --- shared values
     short = git(root, "rev-parse", "--short", "HEAD").strip()
     full = git(root, "rev-parse", "HEAD").strip()
     date = datetime.date.today().isoformat()
     remote = git(root, "remote", "get-url", "origin", check=False).strip()
     name = re.sub(r"\.git$", "", remote.rsplit("/", 1)[-1]) if remote else root.name
     if mode == "existing":
-        status_line = (f"SCAFFOLDED @ {short} ({date}) — structure only; DO NOT cite as "
-                       f"truth until the distillation pass (knowledge/_bootstrap-brief.md) flips this")
-        arch_tldr = (f"Stub — SCAFFOLDED pending the distillation pass "
-                     f"(knowledge/_bootstrap-brief.md); do not cite yet.")
+        status_line = kbformat.render_status(
+            "SCAFFOLDED", short, date,
+            "structure only; DO NOT cite as truth until the distillation pass "
+            "(knowledge/_bootstrap-brief.md) flips this")
+        arch_tldr = ("Stub — SCAFFOLDED pending the distillation pass "
+                     "(knowledge/_bootstrap-brief.md); do not cite yet.")
     else:
-        status_line = (f"VERIFIED @ {short} ({date}) — baseline is the init commit; "
-                       f"the KB grows via the write-back policy")
+        status_line = kbformat.render_status(
+            "VERIFIED", short, date,
+            "baseline is the init commit; the KB grows via the write-back policy")
         arch_tldr = ("Fresh project — record tiers and decisions here as they land, "
                      "every claim labeled ✅/❓.")
     values = {
@@ -340,111 +388,152 @@ def main():
         "DATE": date, "STATUS_LINE": status_line, "ARCH_TLDR": arch_tldr,
     }
 
-    # --- knowledge/ from template
-    copied = 0
-    for src in sorted((TEMPLATE_DIR / "knowledge").rglob("*")):
-        if src.is_dir():
-            continue
-        rel = src.relative_to(TEMPLATE_DIR / "knowledge")
-        dst = root / "knowledge" / rel.parent
-        dst.mkdir(parents=True, exist_ok=True)
-        out = dst / (rel.stem if rel.suffix == ".tmpl" else rel.name)
-        if out.exists() and not a.force:
-            print(f"[kbase] skip (exists, no --force): knowledge/{out.relative_to(root / 'knowledge')}")
-            continue
-        text = src.read_text(encoding="utf-8")
-        out.write_text(render(text, values) if rel.suffix == ".tmpl" else text, encoding="utf-8")
-        copied += 1
+    # Prepare and validate the complete write set before creating any files.
+    files, managed, notices = {}, {}, []
+    try:
+        for src in sorted((TEMPLATE_DIR / "knowledge").rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(TEMPLATE_DIR / "knowledge")
+            out = Path("knowledge") / rel.parent / (rel.stem if rel.suffix == ".tmpl" else rel.name)
+            text = src.read_text(encoding="utf-8")
+            files[out.as_posix()] = (render(text, values) if rel.suffix == ".tmpl" else text).encode("utf-8")
 
-    # --- scripts/
-    (root / "scripts").mkdir(exist_ok=True)
-    for script in ("ksearch.py", "knowledge-gate.py"):
-        dst = root / "scripts" / script
-        if dst.exists() and not a.force:
-            print(f"[kbase] skip (exists, no --force): scripts/{script}")
-            continue
-        shutil.copy2(TEMPLATE_DIR / "scripts" / script, dst)
-        copied += 1
+        for script in SCRIPTS:
+            rel = f"scripts/{script}"
+            data = (TEMPLATE_DIR / rel).read_bytes()
+            dst = check_destination(root, rel)
+            if dst.exists() and dst.read_bytes() != data and not a.force:
+                ap.error(f"conflicting {rel}; move or rename that file, or review it and rerun with --force")
+            files[rel] = data
+            managed[rel] = digest(data)
 
-    # --- skill stubs (.agents/skills/) — thin pointers to canonical procedures
-    for skill in ("distill", "kb-audit"):
-        dst = root / ".agents" / "skills" / skill / "SKILL.md"
-        if dst.exists() and not a.force:
-            print(f"[kbase] skip (exists, no --force): .agents/skills/{skill}/SKILL.md")
-            continue
+        skills = CORE_SKILLS + (WORKFLOW_SKILLS if a.workflow else ())
+        for agent in a.agents:
+            for skill in skills:
+                rel = f"{AGENT_DIRS[agent]}/skills/{skill}/SKILL.md"
+                data = (TEMPLATE_DIR / "skills" / skill / "SKILL.md").read_bytes()
+                dst = check_destination(root, rel)
+                if dst.exists() and dst.read_bytes() != data and not a.force:
+                    notices.append(f"preserved custom {rel}; merge its canonical procedure pointer manually")
+                    continue
+                files[rel] = data
+                managed[rel] = digest(data)
+
+        block = render((TEMPLATE_DIR / "AGENTS.md.tmpl").read_text(encoding="utf-8"), values).encode("utf-8")
+        if (root / "AGENTS.md").exists():
+            files["knowledge/_agents-router-block.md"] = block
+            notices.append("AGENTS.md exists — merge knowledge/_agents-router-block.md into AGENTS.md manually")
+        else:
+            files["AGENTS.md"] = block
+        if "claude" in a.agents:
+            claude_block = "# Knowledge base\n\n@AGENTS.md\n".encode("utf-8")
+            if (root / "CLAUDE.md").exists():
+                existing = (root / "CLAUDE.md").read_text(encoding="utf-8")
+                if "@AGENTS.md" not in existing.splitlines():
+                    files["knowledge/_claude-router-block.md"] = claude_block
+                    notices.append("CLAUDE.md exists — merge knowledge/_claude-router-block.md into CLAUDE.md manually")
+            else:
+                files["CLAUDE.md"] = claude_block
+
+        gi = root / ".gitignore"
+        entry = "knowledge/_ksearch-log.tsv"
+        current = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        if entry not in current.splitlines():
+            files[".gitignore"] = (current + ("\n" if current and not current.endswith("\n") else "") + entry + "\n").encode("utf-8")
+        pc = root / ".pre-commit-config.yaml"
+        snippet = (TEMPLATE_DIR / ".pre-commit-snippet.yaml").read_bytes()
+        if pc.exists():
+            if "knowledge-gate" not in pc.read_text(encoding="utf-8"):
+                files[".pre-commit-knowledge-gate-snippet.yaml"] = snippet
+                notices.append("merge .pre-commit-knowledge-gate-snippet.yaml into .pre-commit-config.yaml")
+        else:
+            files[".pre-commit-config.yaml"] = snippet
+            notices.append("created .pre-commit-config.yaml; activate the hook with `pre-commit install` after installing pre-commit")
+
+        brief_rel = "knowledge/_bootstrap-brief.md"
+        brief = check_destination(root, brief_rel)
+        remove_brief = False
+        manifest = {
+            "schema_version": 1,
+            "template_version": VERSION_FILE.read_text(encoding="utf-8").strip(),
+            "agents": a.agents,
+            "workflow": a.workflow,
+            "source_roots": roots,
+            "managed_files": managed,
+        }
+        if mode == "existing":
+            files[brief_rel] = build_brief(name, short, date, root, pre_stats).encode("utf-8")
+            manifest["bootstrap_brief_sha256"] = digest(files[brief_rel])
+        elif brief.exists():
+            previous_manifest = root / ".kbase.json"
+            previous = json.loads(previous_manifest.read_text(encoding="utf-8")) if previous_manifest.exists() else {}
+            if not isinstance(previous, dict) or previous.get("bootstrap_brief_sha256") != digest(brief.read_bytes()):
+                ap.error("greenfield mode conflicts with an existing bootstrap brief that is modified or not tracked by kbase; "
+                         "review and move knowledge/_bootstrap-brief.md before rerunning")
+            remove_brief = True
+        files[".kbase.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        for rel in files:
+            check_destination(root, rel)
+    except (OSError, ValueError) as exc:
+        ap.error(str(exc))
+
+    print(f"[kbase] target   : {root}")
+    print(f"[kbase] mode     : {mode} ({src_files} source files, {commits} commits; override with --mode)")
+    print(f"[kbase] agents   : {', '.join(a.agents) or 'none'}")
+    print(f"[kbase] sources  : {', '.join(roots)}")
+    for rel, data in files.items():
+        dst = root / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(TEMPLATE_DIR / "skills" / skill / "SKILL.md", dst)
-        copied += 1
+        dst.write_bytes(data)
+        if rel.startswith("scripts/"):
+            shutil.copymode(TEMPLATE_DIR / rel, dst)
+    if remove_brief:
+        brief.unlink()
+        notices.append("removed unchanged generated bootstrap brief for greenfield mode")
+    for notice in notices:
+        print(f"[kbase] {notice}")
 
-    # --- root AGENTS.md
-    agents = root / "AGENTS.md"
-    block = render((TEMPLATE_DIR / "AGENTS.md.tmpl").read_text(encoding="utf-8"), values)
-    if agents.exists():
-        (root / "knowledge" / "_agents-router-block.md").write_text(block, encoding="utf-8")
-        print("[kbase] AGENTS.md exists — router block written to "
-              "knowledge/_agents-router-block.md; merge it into AGENTS.md manually")
-    else:
-        agents.write_text(block, encoding="utf-8")
-        copied += 1
-
-    # --- keep the ksearch query log local (audit input, not repo content)
-    gi = root / ".gitignore"
-    entry = "knowledge/_ksearch-log.tsv"
-    current = gi.read_text(encoding="utf-8") if gi.exists() else ""
-    if entry not in current.splitlines():
-        with open(gi, "a", encoding="utf-8") as fh:
-            if current and not current.endswith("\n"):
-                fh.write("\n")
-            fh.write(entry + "\n")
-
-    # --- pre-commit wiring
-    pc = root / ".pre-commit-config.yaml"
-    snippet = (TEMPLATE_DIR / ".pre-commit-snippet.yaml").read_text(encoding="utf-8")
-    if pc.exists():
-        if "knowledge-gate" not in pc.read_text(encoding="utf-8"):
-            (root / ".pre-commit-knowledge-gate-snippet.yaml").write_text(snippet, encoding="utf-8")
-            print("[kbase] .pre-commit-config.yaml exists — merge "
-                  ".pre-commit-knowledge-gate-snippet.yaml into it")
-    else:
-        pc.write_text(snippet, encoding="utf-8")
-        print("[kbase] created .pre-commit-config.yaml with the knowledge-gate hook "
-              "(needs `pip install pre-commit && pre-commit install`)")
-
-    # --- bootstrap brief (existing mode only)
-    if mode == "existing":
-        (root / "knowledge" / "_bootstrap-brief.md").write_text(
-            build_brief(name, short, date, root, pre_stats), encoding="utf-8")
-        print(f"[kbase] wrote knowledge/_bootstrap-brief.md (evidence pack + checklist)")
-
-    # --- smoke test
-    env = dict(os.environ, KSEARCH_NO_LOG="1")
-    r = subprocess.run(  # noqa: S603
-        [sys.executable, str(root / "scripts" / "ksearch.py"), name, "--limit", "3"],
-        capture_output=True, text=True, env=env,
+    # Always inspect the generated KB, independent of caller cwd/environment.
+    env = dict(os.environ, KSEARCH_NO_LOG="1", KB_ROOT=str(root / "knowledge"))
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "ksearch.py"), "--limit", "3", "knowledge"],
+        cwd=root, capture_output=True, text=True, env=env,
     )
-    head = (r.stdout or r.stderr).splitlines()[:1]
-    print(f"[kbase] ksearch smoke: {' '.join(head) if head else '(no output)'} "
-          f"(exit {r.returncode}; 1 = no hits yet is fine on an empty KB)")
+    valid_no_hits = result.returncode == 1 and result.stdout.strip() == "no matches"
+    if (result.returncode != 0 and not valid_no_hits) or result.stderr.strip():
+        print(f"[kbase] ERROR: generated ksearch smoke failed (exit {result.returncode})", file=sys.stderr)
+        print(result.stderr or result.stdout, file=sys.stderr)
+        return 1
+    print(f"[kbase] ksearch smoke: {'hits found' if result.returncode == 0 else 'no hits yet (valid empty search)'}")
+    gate = subprocess.run(
+        [sys.executable, str(root / "scripts" / "knowledge-gate.py"), "--all"],
+        cwd=root, capture_output=True, text=True,
+    )
+    if gate.returncode:
+        print("[kbase] ERROR: generated KB failed full-tree validation", file=sys.stderr)
+        print(gate.stdout + gate.stderr, file=sys.stderr)
+        return 1
+    print("[kbase] full-tree gate: passed")
 
-    # --- next steps
+    # Explicit paths include selected dot-directories without staging unrelated files.
+    stage_paths = list(files)
+    if remove_brief and git(root, "ls-files", "--", brief_rel).strip():
+        stage_paths.append(brief_rel)
+    stage = "git add -- " + " ".join(shlex.quote(path) for path in sorted(stage_paths))
+    status = "SCAFFOLDED (until distilled)" if mode == "existing" else f"VERIFIED @ {short} (init baseline)"
+    print(f"\n[kbase] DONE — {len(files)} files. KB status: {status}.")
+    if a.agents:
+        print("Skill adapters: " + ", ".join(f"{AGENT_DIRS[agent]}/skills/" for agent in a.agents))
     if mode == "existing":
-        print(f"""
-[kbase] DONE — {copied} files. KB status: SCAFFOLDED (until distilled).
-Skill stubs: .agents/skills/distill + kb-audit (canonical procedures in
-knowledge/practices/skills/). If your harness auto-discovers .agents/skills/,
-/distill runs the bootstrap pass directly.
-NEXT STEP (the whole interface): open an agent session in this repo and say
-    "read AGENTS.md"
-The router's bootstrap rule sends it to knowledge/_bootstrap-brief.md; when the
-distillation completes it flips the status to VERIFIED and deletes the brief.
-Then: git add knowledge/ scripts/ .agents/ AGENTS.md .pre-commit* && commit.""")
+        print('Open an agent session in this repo and say "read AGENTS.md"; the bootstrap rule starts distillation.')
+        print("Complete distillation, review the changes, and stage the resulting files before committing.")
+        # Distillation deletes the brief; git add of an untracked, removed file would fail.
+        print("To stage the scaffold before distillation:")
     else:
-        print(f"""
-[kbase] DONE — {copied} files. KB status: VERIFIED @ {short} (init baseline).
-Greenfield: no distillation needed. Grow the KB via the write-back policy —
-knowledge commits ride with the code that taught them. Start by replacing the
-architecture.md stub TL;DR with the first real tier description.
-Then: git add knowledge/ scripts/ AGENTS.md .pre-commit* && commit.""")
+        print("Grow the KB via the write-back policy; fill the project placeholders with verified commands and architecture.")
+        print("Review changes, then stage the generated files before committing:")
+    print("    " + stage)
     return 0
 
 

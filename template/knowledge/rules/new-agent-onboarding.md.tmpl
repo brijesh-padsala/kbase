@@ -1,10 +1,10 @@
 # New-agent onboarding
 
-> **TL;DR:** Five steps from cold start to productive. If the KB status is SCAFFOLDED, step 0 outranks everything.
+> **TL;DR:** Start at the KB status and task board, check ownership when resuming, then retrieve relevant knowledge and verify source before acting.
 
 0. **Check the KB status line** in [INDEX.md](../INDEX.md). If SCAFFOLDED, complete `knowledge/_bootstrap-brief.md` first — that is the session's highest-priority task. Otherwise:
-1. **Read [INDEX.md](../INDEX.md)** — the "Where to look first" table routes everything.
+1. **Read [INDEX.md](../INDEX.md)** — the "Where to look first" table routes everything. Check the [plans board](../plans/README.md); for resumed work, follow [kb-handoff](../practices/skills/kb-handoff.md) to recheck checkout state and ownership.
 2. **Search, don't read:** `python3 scripts/ksearch.py "<task>"`. Read the matching TL;DR and needed sections only. Use `--dir` to narrow; `--include-archive` only for historical investigation. If `ksearch` is unavailable, use `rg` over `knowledge/`.
-3. **For code structure**, use `ripwire <source-dir> --for="<task>"` if installed (signatures-not-bodies); else targeted `rg` + read. Verify relevant source and tests before edits.
+3. **For code structure**, use the [ripwire routes](../practices/commands.md) if installed; otherwise targeted `rg` + source reads. Verify relevant source and tests before edits. On first setup or suspected integration trouble, run `python3 scripts/kbase-doctor.py`.
 4. **Revalidate before acting:** dated knowledge against this checkout (`✅` from an old baseline is a lead, not a fact); runtime claims against the target environment.
 5. **Write back per [write-back-policy.md](write-back-policy.md)** and follow [boundaries.md](boundaries.md) — ask-first items mean ask-first.

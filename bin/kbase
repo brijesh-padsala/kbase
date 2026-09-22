@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Scaffold, diagnose, check, and safely update an installed knowledge base."""
+
+import argparse
+import difflib
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+BASE = Path(__file__).resolve().parents[1]
+TEMPLATE = BASE / "template"
+sys.path.insert(0, str(TEMPLATE / "scripts"))
+DOCTOR = runpy.run_path(str(TEMPLATE / "scripts/kbase-doctor.py"))
+
+
+def repository(target):
+    result = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=True,
+    )
+    return Path(result.stdout.strip()).resolve()
+
+
+def template_file(relative):
+    parts = Path(relative).parts
+    if len(parts) == 2 and parts[0] == "scripts" and parts[1] in DOCTOR["SCRIPTS"]:
+        return TEMPLATE / relative
+    if (len(parts) == 4 and parts[0] in DOCTOR["AGENT_DIRS"].values()
+            and parts[1] == "skills" and parts[2] in DOCTOR["CORE_SKILLS"] + DOCTOR["WORKFLOW_SKILLS"]
+            and parts[3] == "SKILL.md"):
+        return TEMPLATE / "skills" / parts[2] / "SKILL.md"
+    raise ValueError(f"Unsupported managed file: {relative}; only generated scripts and skill stubs can update")
+
+
+def expected_files(manifest):
+    paths = {f"scripts/{name}" for name in DOCTOR["SCRIPTS"]}
+    skills = DOCTOR["CORE_SKILLS"] + (DOCTOR["WORKFLOW_SKILLS"] if manifest["workflow"] else ())
+    for agent in manifest["agents"]:
+        paths.update(f"{DOCTOR['AGENT_DIRS'][agent]}/skills/{skill}/SKILL.md" for skill in skills)
+    return paths
+
+
+def prepare_update(root, manifest):
+    """Preflight the entire update before writing any file."""
+    changes, conflicts = [], []
+    digests = dict(manifest["managed_files"])
+    for rel in sorted(expected_files(manifest) | set(digests)):
+        source = template_file(rel)
+        target = DOCTOR["managed_path"](root, rel)
+        if target.exists() and not target.is_file():
+            conflicts.append(f"{rel}: destination is not a regular file")
+            continue
+        old = target.read_bytes() if target.exists() else None
+        new = source.read_bytes()
+        digest = hashlib.sha256(new).hexdigest()
+        recorded = digests.get(rel)
+        if old != new and recorded is not None and (old is None or hashlib.sha256(old).hexdigest() != recorded):
+            conflicts.append(f"{rel}: locally edited or deleted; restore/reconcile it before updating")
+            continue
+        if old is not None and old != new and recorded is None:
+            conflicts.append(f"{rel}: existing file is not owned by this installation")
+            continue
+        if rel.endswith("/SKILL.md"):
+            canonical = root / "knowledge/practices/skills" / f"{Path(rel).parts[2]}.md"
+            if not canonical.is_file():
+                conflicts.append(f"{rel}: review and add canonical procedure {canonical.relative_to(root)} first")
+                continue
+        digests[rel] = digest
+        if old != new:
+            changes.append((rel, old, new, source.stat().st_mode & 0o777))
+    return changes, conflicts, digests
+
+
+def update(root, apply):
+    manifest = DOCTOR["load_manifest"](root)
+    original_manifest = (root / ".kbase.json").read_bytes()
+    changes, conflicts, digests = prepare_update(root, manifest)
+    version = (BASE / "VERSION").read_text(encoding="utf-8").strip()
+    print(f"Template {manifest['template_version']} -> {version}")
+    for rel, old, new, _ in changes:
+        before = (old or b"").decode("utf-8", errors="replace").splitlines(keepends=True)
+        after = new.decode("utf-8", errors="replace").splitlines(keepends=True)
+        print("".join(difflib.unified_diff(before, after, fromfile=f"installed/{rel}", tofile=f"template/{rel}")), end="")
+    if conflicts:
+        for conflict in conflicts:
+            print(f"CONFLICT: {conflict}")
+        print("No files written. Resolve the conflicts and preview again.")
+        return 1
+    updated = dict(manifest, template_version=version, managed_files=digests)
+    if not changes and updated == manifest:
+        print("Already current; no files written.")
+        return 0
+    if not apply:
+        print(f"Preview: {len(changes)} generated file(s) and .kbase.json would update. Use --apply to write them.")
+        return 0
+    # Recheck content after printing the preview so edits made during review are kept.
+    if (root / ".kbase.json").read_bytes() != original_manifest:
+        raise ValueError("Manifest changed during update; preview again")
+    for rel, old, _, _ in changes:
+        target = DOCTOR["managed_path"](root, rel)
+        current = target.read_bytes() if target.exists() else None
+        if current != old:
+            raise ValueError(f"{rel} changed during update; preview again")
+    for rel, _, new, mode in changes:
+        target = DOCTOR["managed_path"](root, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(new)
+        target.chmod(mode)
+    (root / ".kbase.json").write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Updated {len(changes)} generated file(s) and .kbase.json. Knowledge content was preserved.")
+    return 0
+
+
+def main():
+    # Forward init's options unchanged so the established entry point stays usable.
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        return subprocess.call([sys.executable, str(BASE / "bin/kbase-init"), *sys.argv[2:]])
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("init", help="initialize a repository (see init --help)")
+    for name, help_text in (("doctor", "check installation and optional tooling"),
+                            ("check", "validate the full working-tree KB"),
+                            ("update", "preview generated tooling updates")):
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("target", nargs="?", default=".")
+        if name == "doctor":
+            command.add_argument("--strict", action="store_true")
+            command.add_argument("--json", action="store_true")
+        if name == "update":
+            command.add_argument("--apply", action="store_true", help="apply the preview if all managed files are safe")
+    args = parser.parse_args()
+    try:
+        root = repository(args.target)
+        if args.command == "update":
+            return update(root, args.apply)
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        if args.command == "check":
+            cmd = [sys.executable, str(root / "scripts/knowledge-gate.py"), "--all"]
+        else:
+            cmd = [sys.executable, str(TEMPLATE / "scripts/kbase-doctor.py"), str(root)]
+            cmd += [flag for flag in ("--strict", "--json") if getattr(args, flag[2:].replace("-", "_"))]
+        return subprocess.call(cmd, cwd=root, env=env)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        print(f"kbase: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

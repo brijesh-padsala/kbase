@@ -14,11 +14,9 @@ The knowledge base is not an append-only log. On the audit cadence (weekly or mo
 
 **Audit cadence: TODO(project) — e.g. "weekly, Monday"**
 
-1. **Zero/weak-hit audit:** review `_ksearch-log.tsv` (queries logged with their top hit). For every query that returned nothing or the wrong file, add the missing vocabulary to the relevant TL;DRs — this is the system's substitute for embeddings.
-2. **Label audit:** spot-check ✅ claims whose evidence commits are old; downgrade or re-verify.
-3. **Size audit:** any file over ~400 lines is a split candidate; archive material nobody cited in the last audit window.
+Run the canonical procedure: [practices/skills/kb-audit.md](../practices/skills/kb-audit.md) — query-log review, label spot-check, reference audit, size/splits.
 
-Any agent may prune mid-cadence using the same rules. For intentional large pruning (>50% of a protected file: lessons log, operations record), stage an `archive/` note explaining the removal and preserving relevant history. `scripts/knowledge-gate.py` guards against silent truncation at commit time.
+Any agent may prune mid-cadence using the same procedure. Intentional large pruning of protected files needs a staged `archive/` note ([kb-maintenance.md](kb-maintenance.md)).
 
 ## Disposition rules
 

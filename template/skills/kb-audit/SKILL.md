@@ -1,6 +1,6 @@
 ---
 name: kb-audit
-description: Run the KB consolidation pass — review the ksearch query log for misses and fix TL;DR vocabulary, spot-check aging ✅ claims, verify knowledge/ file references against the tree, split overgrown files. Ends in one audit commit. Use on the hygiene audit cadence or on demand; requires KB status VERIFIED.
+description: Run the KB consolidation pass per knowledge/practices/skills/kb-audit.md. Invoke on the hygiene audit cadence or on demand; requires KB status VERIFIED.
 ---
 
 # kb-audit
