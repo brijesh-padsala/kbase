@@ -83,6 +83,14 @@ class RetrievalEvaluation(unittest.TestCase):
         self.assertEqual(report["summary"]["raw_mrr"], 0)
         self.assertEqual(report["summary"]["abstention_rate"], 0)
 
+    def test_symlink_resolves_search_beside_the_real_evaluator(self):
+        alias = self.base / "evaluate"
+        alias.symlink_to(self.script)
+        self.script = alias
+        result = self.run_eval([{"query": "canary", "relevant": ["rules/deploy.md"]}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["summary"]["passed"], 1)
+
     def test_fixture_validation_rejects_invalid_cases(self):
         (self.root / "archive").mkdir()
         (self.root / "archive" / "old.md").write_text("# Old canary\n")

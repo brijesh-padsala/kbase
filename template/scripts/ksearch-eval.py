@@ -81,7 +81,7 @@ def load_cases(path, root, available):
 
 def displayed_results(case, root, limit, max_bytes):
     """Measure the actual CLI serialization, including diagnostic overhead."""
-    command = [sys.executable, "-B", str(Path(__file__).with_name("ksearch.py")),
+    command = [sys.executable, "-B", str(Path(__file__).resolve().with_name("ksearch.py")),
                "--json", "--limit", str(limit), "--max-bytes", str(max_bytes)]
     if case["dir"]:
         command.extend(["--dir", case["dir"]])
