@@ -44,7 +44,7 @@ TLDR_EXEMPT = ("INDEX.md", "README.md")
 PROTECTED = ("knowledge/learning/lessons-log.md", "knowledge/memory/operations.md")
 LESSONS_FILE = PROTECTED[0]
 LESSON_ENTRY = re.compile(r"^-\s*(✅|⚠|❓)")
-SCRIPT_REF = re.compile(r"scripts/[a-z0-9][a-z0-9_-]*\.py")
+SCRIPT_REF = re.compile(r"(?<![\w/-])scripts/[a-z0-9][a-z0-9_-]*\.py")
 SECRET_NAME = re.compile(
     r"^\.env|\.(env|pem|key|p12|pfx|keystore|jks)$|^id_(rsa|ed25519|ecdsa)\b", re.IGNORECASE
 )
