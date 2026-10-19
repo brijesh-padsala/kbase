@@ -1,6 +1,6 @@
 # Skills — index & authoring rules
 
-> **TL;DR:** Skills are shared procedures; agent adapters contain only discovery pointers. Core discovery includes distill, kb-audit, and kb-handoff. The optional workflow pack adds planning, implementation, review, and board management.
+> **TL;DR:** Skills are shared procedures; agent adapters contain only discovery pointers. Core discovery includes distill, kb-audit, kb-handoff, and kb-refine. The optional workflow pack adds planning, implementation, review, and board management.
 
 ## Available skills
 
@@ -9,6 +9,7 @@
 | `distill` | Core | KB status is SCAFFOLDED / bootstrap brief exists | [distill.md](distill.md) |
 | `kb-audit` | Core | [hygiene audit cadence](../../rules/hygiene.md) fires, or an audit is requested | [kb-audit.md](kb-audit.md) |
 | `kb-handoff` | Core | saving progress, handing off, or resuming an active task | [kb-handoff.md](kb-handoff.md) |
+| `kb-refine` | Core | retrieval misses or wording/routing changes need evidence before landing | [kb-refine.md](kb-refine.md) |
 | `kb-plan` | Optional workflow | a task needs an executable plan | [kb-plan.md](kb-plan.md) |
 | `kb-implement` | Optional workflow | an authorized plan is ready to execute | [kb-implement.md](kb-implement.md) |
 | `kb-review` | Optional workflow | evaluating a change against its plan and repo rules | [kb-review.md](kb-review.md) |

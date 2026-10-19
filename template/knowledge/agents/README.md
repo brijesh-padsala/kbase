@@ -6,7 +6,7 @@
 
 Init defaults to `--agents codex,claude`; select `--agents codex`, `--agents claude`, or `--agents none` to change discovery wiring. Codex uses `.agents/skills/<name>/SKILL.md`. Claude uses `.claude/skills/<name>/SKILL.md` and a `CLAUDE.md` import of `@AGENTS.md`. Existing entry-point instructions are preserved; merge any generated router guidance and verify the selected harness can discover the stubs.
 
-Both adapters point to the same [canonical procedures](../practices/skills/README.md) and root `AGENTS.md` router. Core skills are distill, kb-audit, and kb-handoff; `--workflow` adds discovery for kb-plan, kb-implement, kb-review, and kb-board. The procedures are always present in the KB even when no adapter is selected.
+Both adapters point to the same [canonical procedures](../practices/skills/README.md) and root `AGENTS.md` router. Core skills are distill, kb-audit, kb-handoff, and kb-refine; `--workflow` adds discovery for kb-plan, kb-implement, kb-review, and kb-board. The procedures are always present in the KB even when no adapter is selected.
 
 Run `python3 scripts/kbase-doctor.py` after installation or a wiring change. Adapter paths are connection details; they are not additional stores for project facts.
 

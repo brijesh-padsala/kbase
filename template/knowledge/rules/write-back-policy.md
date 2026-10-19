@@ -10,7 +10,7 @@
    - how-we-build (commands, conventions) → `practices/`
    - verified architecture/specs → `docs/`
    - operational facts (environments, incidents, endpoints) → `memory/`
-   - dated lessons → `learning/lessons-log.md` (append-only); distilled pitfalls → `learning/pitfalls.md`
+   - dated lessons → `learning/lessons-log.md` (append-only; entries carry domain + cue + evidence — format in that file); distilled pitfalls → `learning/pitfalls.md`
    - plans/specs/proposals → `plans/` (one numbered file per plan, `## Status` section required)
 3. **Plans/specs/proposals → `knowledge/plans/` ONLY.** Whatever plan tool your framework gives you (plan mode, mission specs), the output file lands in `plans/<NNN>-<slug>.md`; update the board in `plans/README.md`. Never your native plans dir.
 4. **Commit knowledge changes with the code that taught them.** A lesson without its evidence commit is an unverifiable claim.

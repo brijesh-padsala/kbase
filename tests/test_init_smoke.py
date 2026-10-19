@@ -188,7 +188,7 @@ class InitSmoke(unittest.TestCase):
         result = self._init()
         self.assertEqual(result.returncode, 0, result.stderr)
         for directory in (".agents", ".claude"):
-            for skill in ("distill", "kb-audit", "kb-handoff"):
+            for skill in ("distill", "kb-audit", "kb-handoff", "kb-refine"):
                 stub = self.root / directory / "skills" / skill / "SKILL.md"
                 self.assertTrue(stub.is_file(), str(stub))
             self.assertFalse((self.root / directory / "skills" / "kb-plan").exists())
@@ -199,7 +199,7 @@ class InitSmoke(unittest.TestCase):
         self.assertEqual(manifest["agents"], ["codex", "claude"])
         self.assertEqual(manifest["source_roots"], ["src", "frontend"])
         self.assertFalse(manifest["workflow"])
-        self.assertEqual(len(manifest["managed_files"]), 11)
+        self.assertEqual(len(manifest["managed_files"]), 13)
         for rel, sha in manifest["managed_files"].items():
             self.assertEqual(hashlib.sha256((self.root / rel).read_bytes()).hexdigest(), sha)
             self.assertTrue(rel.startswith(("scripts/", ".agents/skills/", ".claude/skills/")), rel)

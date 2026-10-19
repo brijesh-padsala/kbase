@@ -194,6 +194,79 @@ class GateIntegration(unittest.TestCase):
         self.gate(expected=1, contains="SHAs disagree")
         self.gate("--all", expected=1, contains="SHAs disagree")
 
+    def test_staged_lesson_entry_needs_evidence(self):
+        self.write(
+            "knowledge/learning/lessons-log.md",
+            "# Lessons\n> **TL;DR:** log\n\n"
+            "- ✅ — **Claimed (2026-01-01).** asserted, not shown.\n",
+        )
+        self.append("knowledge/INDEX.md", "[Lessons](learning/lessons-log.md)\n")
+        self.git("add", "knowledge")
+        self.gate(expected=1, contains="no evidence")
+        self.write(
+            "knowledge/learning/lessons-log.md",
+            "# Lessons\n> **TL;DR:** log\n\n"
+            "- ✅ — **Claimed (2026-01-01).** asserted, not shown.\n"
+            "  **Evidence:** commit " + self.baseline + "\n",
+        )
+        self.git("add", "knowledge/learning/lessons-log.md")
+        self.gate()
+
+    def test_all_checks_every_lesson_entry(self):
+        self.write(
+            "knowledge/learning/lessons-log.md",
+            "# Lessons\n> **TL;DR:** log\n\n"
+            "- ❓ — **Open (2026-01-01).** unverified observation.\n"
+            "- ✅ — **Asserted (2026-01-02).** no citation.\n",
+        )
+        self.append("knowledge/INDEX.md", "[Lessons](learning/lessons-log.md)\n")
+        self.commit("add lessons")
+        self.gate("--all", expected=1, contains="Asserted")
+
+    def test_note_invoking_missing_script_fails_both_modes(self):
+        self.append("knowledge/rules/example.md", "Run `python3 scripts/absent.py` first.\n")
+        self.git("add", "knowledge/rules/example.md")
+        self.gate(expected=1, contains="scripts/absent.py")
+        self.gate("--all", expected=1, contains="scripts/absent.py")
+
+    def test_script_staged_alongside_its_reference_passes(self):
+        self.write("scripts/helpers.py", "print('ok')\n")
+        self.append("knowledge/rules/example.md", "Run `python3 scripts/helpers.py`.\n")
+        self.git("add", "scripts/helpers.py", "knowledge/rules/example.md")
+        self.gate()
+
+    def test_script_deleted_while_referenced_fails(self):
+        self.write("scripts/helpers.py", "print('ok')\n")
+        self.append("knowledge/rules/example.md", "Run `python3 scripts/helpers.py`.\n")
+        self.commit("add helper and reference")
+        self.git("rm", "scripts/helpers.py")
+        self.append("knowledge/rules/example.md", "An unrelated note edit.\n")
+        self.git("add", "knowledge/rules/example.md")
+        self.gate(expected=1, contains="scripts/helpers.py")
+
+    def test_credential_content_blocked_in_both_modes(self):
+        self.append("knowledge/rules/example.md", "key: AKIAIOSFODNN7EXAMPLE\n")
+        self.git("add", "knowledge/rules/example.md")
+        self.gate(expected=1, contains="AWS")
+        self.git("reset", "-q")  # unstaged content still fails the working-tree check
+        self.gate("--all", expected=1, contains="AWS")
+        self.git("checkout", "--", "knowledge/rules/example.md")
+
+    def test_credential_filename_blocked(self):
+        self.write("knowledge/.env", "A=1\n")
+        self.git("add", "knowledge/.env")
+        self.gate(expected=1, contains=".env")
+
+    def test_duplicate_plan_numbers_blocked(self):
+        for slug in ("a", "b"):
+            self.write(
+                f"knowledge/plans/001-{slug}.md",
+                f"# Plan {slug}\n> **TL;DR:** a plan.\n## Status\nDRAFT\n",
+            )
+        self.append("knowledge/INDEX.md", "[A](plans/001-a.md) [B](plans/001-b.md)\n")
+        self.git("add", "knowledge")
+        self.gate(expected=1, contains="001")
+
     def test_no_knowledge_is_noop_only_in_default_mode(self):
         self.git("rm", "-r", "knowledge")
         self.git("commit", "-qm", "remove knowledge")

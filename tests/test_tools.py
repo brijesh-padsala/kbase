@@ -198,6 +198,31 @@ class InstalledTools(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("kb-review", result.stdout)
 
+    def test_starter_eval_fixture_warns_until_grown(self):
+        checks = json.loads(self.cli("doctor", "--json").stdout)["checks"]
+        self.assertTrue(any(
+            c["level"] == "WARN" and "starter" in c["message"] for c in checks
+        ))
+        cases = self.root / "knowledge/evals/cases.jsonl"
+        cases.write_text(
+            cases.read_text() + '{"query": "deploy command", "relevant": ["practices/commands.md"]}\n',
+            encoding="utf-8",
+        )
+        checks = json.loads(self.cli("doctor", "--json").stdout)["checks"]
+        self.assertFalse(any("starter" in c["message"] for c in checks))
+
+    def test_oversized_cold_file_warns(self):
+        checks = json.loads(self.cli("doctor", "--json").stdout)["checks"]
+        self.assertFalse(any("Cold files" in c["message"] for c in checks))
+        archived = self.root / "knowledge/plans-archive/001-old.md"
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        archived.write_text("# old\n" + "x" * (70 * 1024), encoding="utf-8")
+        checks = json.loads(self.cli("doctor", "--json").stdout)["checks"]
+        self.assertTrue(any(
+            c["level"] == "WARN" and "Cold files" in c["message"]
+            and "plans-archive/001-old.md" in c["message"] for c in checks
+        ))
+
     def test_missing_source_directory_fails_doctor(self):
         manifest = self.manifest()
         manifest["source_roots"] = ["gone"]

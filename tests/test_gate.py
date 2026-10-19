@@ -177,6 +177,119 @@ class StatusLines(unittest.TestCase):
         ), [])
 
 
+class LessonEvidence(unittest.TestCase):
+    LOG = "# Lessons\n> **TL;DR:** log\n\n"
+
+    def test_labeled_entry_with_evidence_passes(self):
+        content = self.LOG + "- ✅ — **Thing (2026-01-01).** Evidence: commit abc.\n"
+        self.assertEqual(gate.check_lesson_evidence(content), [])
+
+    def test_verified_and_stale_entries_need_evidence(self):
+        content = (
+            self.LOG
+            + "- ✅ — **Claimed (2026-01-01).** asserted, not shown.\n"
+            + "- ⚠ — **Old (2025-01-01).** dated and uncited.\n"
+        )
+        problems = gate.check_lesson_evidence(content)
+        self.assertEqual(len(problems), 2)
+        self.assertIn("Claimed", problems[0])
+        self.assertIn("no evidence", problems[0])
+
+    def test_open_observation_is_exempt(self):
+        content = self.LOG + "- ❓ — **Open (2026-01-01).** not verified yet.\n"
+        self.assertEqual(gate.check_lesson_evidence(content), [])
+
+    def test_multiline_entry_evidence_on_continuation_counts(self):
+        content = (
+            self.LOG
+            + "- ✅ — **Thing (2026-01-01).**\n"
+            + "  **Domain:** ci. **Cue:** renames. **Lesson:** grep first.\n"
+            + "  **Evidence:** commit abc123\n"
+            + "\n- ✅ — **Later (2026-01-02).** asserted, not shown.\n"
+        )
+        problems = gate.check_lesson_evidence(content)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Later", problems[0])
+
+    def test_fenced_example_is_not_an_entry(self):
+        content = self.LOG + "```markdown\n- ✅ — **Sample.** no evidence\n```\n"
+        self.assertEqual(gate.check_lesson_evidence(content), [])
+
+    def test_added_bullets_scopes_the_check_to_the_commit(self):
+        old = "- ✅ — **Legacy (2020-01-01).** no cite\n"
+        new = "- ✅ — **Fresh (2026-01-01).** Evidence: run output.\n"
+        content = self.LOG + old + new
+        self.assertEqual(gate.check_lesson_evidence(content, {new.strip()}), [])
+        problems = gate.check_lesson_evidence(content, {old.strip()})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Legacy", problems[0])
+
+
+class ScriptRefs(unittest.TestCase):
+    def test_existing_ref_passes(self):
+        notes = {"knowledge/rules/a.md": "run `python3 scripts/ksearch.py x`\n"}
+        self.assertEqual(gate.check_script_refs(notes, {"scripts/ksearch.py"}), [])
+
+    def test_missing_script_flagged(self):
+        notes = {"knowledge/rules/a.md": "run `python3 scripts/gone.py x`\n"}
+        problems = gate.check_script_refs(notes, {"scripts/ksearch.py"})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("scripts/gone.py", problems[0])
+
+    def test_fenced_examples_and_non_py_paths_ignored(self):
+        notes = {"knowledge/rules/a.md": "```\npython3 scripts/gone.py x\n```\nsee tools/x.py and scripts/setup.sh\n"}
+        self.assertEqual(gate.check_script_refs(notes, set()), [])
+
+
+class PlanNumbers(unittest.TestCase):
+    def test_unique_numbers_pass_and_archive_ignored(self):
+        paths = [
+            "knowledge/plans/001-a.md",
+            "knowledge/plans/002-b.md",
+            "knowledge/plans-archive/001-old.md",
+            "knowledge/plans/artifacts/plan-template.md",
+        ]
+        self.assertEqual(gate.check_plan_numbers(paths), [])
+
+    def test_duplicate_flagged(self):
+        problems = gate.check_plan_numbers(
+            ["knowledge/plans/003-a.md", "knowledge/plans/003-b.md"]
+        )
+        self.assertEqual(len(problems), 1)
+        self.assertIn("003", problems[0])
+
+
+class NoSecrets(unittest.TestCase):
+    def test_clean_notes_and_secret_vocabulary_pass(self):
+        bodies = {"knowledge/memory/operations.md": "secrets live in the vault; name their location\n"}
+        self.assertEqual(
+            gate.check_no_secrets(list(bodies), bodies), []
+        )
+
+    def test_credential_filenames_flagged(self):
+        problems = gate.check_no_secrets(
+            ["knowledge/.env", "knowledge/x.pem", "knowledge/id_ed25519", "knowledge/rules/a.md"], {}
+        )
+        self.assertEqual(len(problems), 3)
+        self.assertIn("credential material", problems[0])
+
+    def test_key_shapes_flagged_in_bodies_including_fences(self):
+        bodies = {"knowledge/docs/x.md": "example:\n```\n-----BEGIN PRIVATE KEY-----\n```\n"}
+        problems = gate.check_no_secrets(list(bodies), bodies)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("PEM", problems[0])
+
+    def test_aws_shaped_id_flagged(self):
+        bodies = {"knowledge/memory/ops.md": "key: AKIAIOSFODNN7EXAMPLE\n"}
+        problems = gate.check_no_secrets(list(bodies), bodies)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("AWS", problems[0])
+
+    def test_non_text_suffix_bodies_not_scanned(self):
+        bodies = {"knowledge/x.bin": "-----BEGIN PRIVATE KEY-----\n"}
+        self.assertEqual(gate.check_no_secrets(list(bodies), bodies), [])
+
+
 class Report(unittest.TestCase):
     def test_report_exit_codes(self):
         out = io.StringIO()

@@ -18,7 +18,7 @@ are standard-library only. `pre-commit` activates commit-time enforcement;
 
 Init installs Codex and Claude discovery adapters by default. Use
 `--agents codex`, `--agents claude`, or `--agents none` to choose. Core skills are
-`distill`, `kb-audit`, and `kb-handoff`; `--workflow` also exposes `kb-plan`,
+`distill`, `kb-audit`, `kb-handoff`, and `kb-refine`; `--workflow` also exposes `kb-plan`,
 `kb-implement`, `kb-review`, and `kb-board`. Pass `--source-dir src` (repeatable)
 to record source roots for structural search; otherwise init detects conventional
 source directories, falling back to `.`.
@@ -80,6 +80,9 @@ the KB; stubs point to the shared procedure.
   spot-checks, reference audit, file splits.
 - **`/kb-handoff`** — save or resume objective, progress, file ownership, test
   evidence, open questions, and the next action in the active plan.
+- **`/kb-refine`** — evidence-checked refinement: propose a wording/routing edit,
+  probe it on a scratch copy of `knowledge/` with the retrieval evaluator, keep
+  what the probe supports.
 
 The optional workflow pack adds **kb-plan / kb-implement / kb-review / kb-board**.
 It uses the existing six plan states; review readiness is narrative, not a new
@@ -102,14 +105,17 @@ query the KB from a busy main thread.
 `scripts/knowledge-gate.py` runs via pre-commit and blocks, scoped to the staged
 overlay so unstaged WIP can't fail it:
 
-1. plan files need `## Status` with a board state;
+1. plan files need `## Status` with a board state, and plan numbers must be unique;
 2. `lessons-log.md` / `operations.md` can't shrink >50% without an archived note (anti-truncation);
 3. added knowledge files are born with a TL;DR and a link from another current file;
 4. KB status line: present in README+INDEX, modes and SHAs agree, VERIFIED names an existing
-   commit, SCAFFOLDED requires the brief.
+   commit, SCAFFOLDED requires the brief;
+5. new ✅/⚠ lesson entries must name their evidence;
+6. credential-shaped filenames or content never enter `knowledge/`;
+7. `scripts/*.py` invoked in note prose must exist once the commit lands.
 
 `--all` checks the full current working tree, including unstaged/untracked notes,
-local Markdown link destinations, and bootstrap state. It skips the historical
+local Markdown link destinations, every lesson entry, and bootstrap state. It skips the historical
 anti-truncation check, which remains a staged-commit rule. A clean Git index is
 not evidence that the full knowledge tree is valid.
 

@@ -12,10 +12,10 @@ Create plans from [artifacts/plan-template.md](artifacts/plan-template.md). Use 
 
 ## Rules
 
-1. One numbered file per plan: `plans/<NNN>-<slug>.md` (next free number, zero-padded 3). Supporting material goes in `plans/artifacts/`, never in a second `NNN-` file.
+1. One numbered file per plan: `plans/<NNN>-<slug>.md` (next free number, zero-padded 3 — the gate rejects duplicates). Supporting material goes in `plans/artifacts/`, never in a second `NNN-` file.
 2. Every plan file has a `## Status` section: DRAFT / READY / IN-PROGRESS / BLOCKED / DONE / ABANDONED. The plan file's Status section — not a runtime flag — is the completion record.
 3. The board row links exactly one plan file in its title cell; status and owner live in their own cells.
 4. Plans land here ONLY — never in an agent's native plans dir ([write-back-policy.md](../rules/write-back-policy.md)).
-5. DONE/ABANDONED plans move to `plans-archive/` (history; never cite as current).
+5. DONE/ABANDONED plans move to `plans-archive/` (history; never cite as current) — **slim before you move**: durable lessons go to [lessons-log](../learning/lessons-log.md), the archived file keeps TL;DR + Status + decisions + links, and dated checkpoint dumps are cut. The full text stays recoverable from git history (`git log -p -- plans-archive/<file>`); supporting material moves with the plan under `plans-archive/artifacts/` or is cut the same way. Doctor warns on cold files over 64K.
 6. Claim a plan by setting Owner before starting work; update Status as it moves.
 7. Record review readiness, findings, and pending verification in the plan narrative. Use the six states above; DONE requires acceptance criteria and required checks/review to be satisfied. A pause is not automatically BLOCKED.

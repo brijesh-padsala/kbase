@@ -35,7 +35,7 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "template"
 VERSION_FILE = TEMPLATE_DIR.parent / "VERSION"
 SCRIPTS = ("kbformat.py", "ksearch.py", "knowledge-gate.py", "kbase-doctor.py", "ksearch-eval.py")
 AGENT_DIRS = {"codex": ".agents", "claude": ".claude"}
-CORE_SKILLS = ("distill", "kb-audit", "kb-handoff")
+CORE_SKILLS = ("distill", "kb-audit", "kb-handoff", "kb-refine")
 WORKFLOW_SKILLS = ("kb-plan", "kb-implement", "kb-review", "kb-board")
 
 # The status-line grammar the gate parses lives in the template's kbformat;

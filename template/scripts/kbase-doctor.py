@@ -19,11 +19,15 @@ sys.dont_write_bytecode = True
 from kbformat import is_current_md
 
 SCRIPTS = ("kbformat.py", "ksearch.py", "ksearch-eval.py", "knowledge-gate.py", "kbase-doctor.py")
-CORE_SKILLS = ("distill", "kb-audit", "kb-handoff")
+CORE_SKILLS = ("distill", "kb-audit", "kb-handoff", "kb-refine")
 WORKFLOW_SKILLS = ("kb-plan", "kb-implement", "kb-review", "kb-board")
 AGENT_DIRS = {"codex": ".agents", "claude": ".claude"}
 CONTEXT_BYTES_ADVISORY = 6000
 DESCRIPTION_BYTES_ADVISORY = 600
+COLD_FILE_BYTES_ADVISORY = 64 * 1024
+# sha256 of the shipped template/knowledge/evals/cases.jsonl — an unchanged
+# fixture means retrieval metrics say nothing about the project yet.
+STARTER_CASES_SHA256 = "16b6f24c146db8d18fe57c4eee5fe40def43b6e2da2ac787dce29df8f5b933e7"
 
 
 def text_metrics(text):
@@ -261,8 +265,26 @@ def check_adapters(root, manifest):
             canonical = root / "knowledge/practices/skills" / f"{skill}.md"
             if not stub.is_file() or not canonical.is_file():
                 checks.append(("FAIL", f"{agent}: missing {rel} or its canonical procedure"))
-            elif f"knowledge/practices/skills/{skill}.md" not in stub.read_text(encoding="utf-8"):
+                continue
+            text = stub.read_text(encoding="utf-8")
+            if f"knowledge/practices/skills/{skill}.md" not in text:
                 checks.append(("FAIL", f"{rel}: canonical procedure pointer is missing"))
+                continue
+            try:
+                fields = skill_metadata(text)
+            except ValueError as exc:
+                checks.append((
+                    "FAIL",
+                    f"{rel}: unreadable frontmatter ({exc}) — a stub that does not "
+                    "parse is dropped silently at load",
+                ))
+                continue
+            if fields["name"] != skill:
+                checks.append((
+                    "FAIL",
+                    f"{rel}: frontmatter name {fields['name']!r} overrides the "
+                    f"directory name {skill!r} at load",
+                ))
     if not checks:
         checks.append(("PASS", "Selected skill discovery layouts and canonical procedures exist"))
     router = root / "AGENTS.md"
@@ -309,11 +331,30 @@ def diagnose(root):
     no_hits = search.returncode == 1 and search.stdout.strip() == "no matches" and not search.stderr
     checks.append(("PASS", "Search script runs without writing a query log") if (search.returncode == 0 and not search.stderr) or no_hits else ("FAIL", "Search script failed: " + (search.stderr or search.stdout).strip()))
     todo = []
+    oversized_cold = []
     for path in (root / "knowledge").rglob("*.md"):
-        if is_current_md(path.relative_to(root).as_posix()) and re.search(r"TODO\((?:project|distillation)\)", path.read_text(encoding="utf-8")):
-            todo.append(str(path.relative_to(root)))
+        rel = path.relative_to(root).as_posix()
+        if is_current_md(rel):
+            if re.search(r"TODO\((?:project|distillation)\)", path.read_text(encoding="utf-8")):
+                todo.append(str(path.relative_to(root)))
+        elif path.stat().st_size > COLD_FILE_BYTES_ADVISORY:
+            oversized_cold.append(f"{rel} ({path.stat().st_size // 1024}K)")
     if todo:
         checks.append(("WARN", "Fill project placeholders: " + ", ".join(sorted(todo))))
+    if oversized_cold:
+        checks.append((
+            "WARN",
+            "Cold files over "
+            f"{COLD_FILE_BYTES_ADVISORY // 1024}K — slim them to decision records; the full "
+            "text stays recoverable from git history: " + ", ".join(sorted(oversized_cold)),
+        ))
+    cases = root / "knowledge" / "evals" / "cases.jsonl"
+    if cases.is_file() and hashlib.sha256(cases.read_bytes()).hexdigest() == STARTER_CASES_SHA256:
+        checks.append((
+            "WARN",
+            "Eval fixture is the unchanged starter set — grow it from real query-log "
+            "misses before trusting retrieval metrics",
+        ))
     hook_result = run(root, "git", "rev-parse", "--git-path", "hooks/pre-commit")
     hook = root / hook_result.stdout.strip()
     config = root / ".pre-commit-config.yaml"

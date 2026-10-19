@@ -55,6 +55,7 @@ Canonical procedures live in [skills/](skills/README.md); [agent adapters](../ag
 - **distill** — the bootstrap distillation pass (SCAFFOLDED → VERIFIED). Invoked via the stub, or by following [skills/distill.md](skills/distill.md) directly.
 - **kb-audit** — the consolidation pass (query-log review, label spot-check, reference audit).
 - **kb-handoff** — save or resume work in the active plan, including ownership and test evidence.
+- **kb-refine** — evidence-checked refinement: propose an edit, probe it on a scratch copy of `knowledge/` with the eval fixture, keep what the probe supports.
 - **Optional workflow discovery (`--workflow` at init):** `kb-plan`, `kb-implement`, `kb-review`, `kb-board`. Their procedures remain readable even without discovery stubs.
 
 ## Knowledge gate (pre-commit)

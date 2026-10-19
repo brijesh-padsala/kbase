@@ -4,7 +4,8 @@
 By default checks use the Git index, so another session's unstaged WIP can
 never fail this gate. --all validates the complete working tree instead:
 
-1. Plan files need a `## Status` section with a board state.
+1. Plan files need a `## Status` section with a board state; plan numbers
+   (`plans/<NNN>-<slug>.md`) must be unique.
 2. lessons-log.md / memory/operations.md may not shrink >50% without a
    staged archive/ note (anti-truncation).
 3. Added knowledge files (all current notes with --all) need a TL;DR and a
@@ -13,6 +14,12 @@ never fail this gate. --all validates the complete working tree instead:
    VERIFIED names a commit that exists; a present _bootstrap-brief.md
    requires SCAFFOLDED (flip and brief deletion happen in one commit).
    SCAFFOLDED requires the brief. --all skips historical anti-truncation checks.
+5. New ✅/⚠ lessons-log entries must name their evidence (❓ entries are open
+   observations and stay exempt). --all checks every entry in the log.
+6. Credential-shaped filenames or content never enter knowledge/ — a tripwire
+   on the write boundary, not a scanner.
+7. `scripts/*.py` paths invoked in note prose must resolve — staged mode checks
+   the post-commit index, --all the working tree.
 
 The note format, current-file scope, and status-line grammar come from
 kbformat (shared with ksearch — one declaration, no drift).
@@ -35,6 +42,24 @@ BOARD_STATES = {"DRAFT", "READY", "IN-PROGRESS", "BLOCKED", "DONE", "ABANDONED"}
 ROOTS = ("knowledge/INDEX.md", "knowledge/README.md")
 TLDR_EXEMPT = ("INDEX.md", "README.md")
 PROTECTED = ("knowledge/learning/lessons-log.md", "knowledge/memory/operations.md")
+LESSONS_FILE = PROTECTED[0]
+LESSON_ENTRY = re.compile(r"^-\s*(✅|⚠|❓)")
+SCRIPT_REF = re.compile(r"scripts/[a-z0-9][a-z0-9_-]*\.py")
+SECRET_NAME = re.compile(
+    r"^\.env|\.(env|pem|key|p12|pfx|keystore|jks)$|^id_(rsa|ed25519|ecdsa)\b", re.IGNORECASE
+)
+SECRET_MARKERS = (
+    ("PEM private key block", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
+    ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("OpenAI-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
+)
+SECRET_SCAN_SUFFIXES = frozenset(
+    {".md", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".yaml", ".yml", ".log", ""}
+)
 
 
 def git(*args, check=True):
@@ -157,6 +182,129 @@ def check_status_lines(lines: dict, brief_present: bool, added: list[str], commi
     return problems
 
 
+def prose_lines(content):
+    """Lines outside fenced code blocks — fences mark examples, not prose."""
+    fence = None
+    for line in content.splitlines():
+        marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if marker:
+            run = marker.group(1)
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            yield line
+
+
+def lesson_entries(content):
+    """Parse the log into (label, lines): a `- ✅/⚠/❓` bullet opens an entry,
+    indented/blank/quote lines continue it, anything else closes it. Fenced
+    blocks are format examples, not entries."""
+    entries, label, chunk, fence = [], None, [], None
+    for line in content.splitlines():
+        marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if marker:
+            run = marker.group(1)
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        m = LESSON_ENTRY.match(line)
+        if m:
+            if label is not None:
+                entries.append((label, chunk))
+            label, chunk = m.group(1), [line]
+        elif label is not None and (not line.strip() or line[0] in " \t>"):
+            chunk.append(line)
+        elif label is not None:
+            entries.append((label, chunk))
+            label, chunk = None, []
+    if label is not None:
+        entries.append((label, chunk))
+    return entries
+
+
+def check_lesson_evidence(content, added_bullets=None):
+    """✅/⚠ lesson entries must name their evidence; ❓ entries are open
+    observations and exempt. `added_bullets` narrows the check to the entries a
+    commit introduced; None checks every entry in the file."""
+    problems = []
+    for label, chunk in lesson_entries(content):
+        if label == "❓" or "evidence" in "\n".join(chunk).lower():
+            continue
+        if added_bullets is not None and chunk[0].strip() not in added_bullets:
+            continue
+        problems.append(
+            f"{LESSONS_FILE}: lesson '{chunk[0].lstrip('- ').strip()[:60]}' names no "
+            "evidence — cite the file, command output, or commit it rests on, "
+            "or label it ❓"
+        )
+    return problems
+
+
+def check_plan_numbers(paths) -> list[str]:
+    """One number per plan — a duplicate means two plans answer to the same
+    board row and one silently shadows the other."""
+    seen = {}
+    problems = []
+    for path in sorted(paths):
+        m = PLAN_FILE.fullmatch(path)
+        if not m:
+            continue
+        if m.group(1) in seen:
+            problems.append(
+                f"{path}: plan number {m.group(1)} is also used by "
+                f"{seen[m.group(1)]} — pick the next free number (plans/README.md rule 1)"
+            )
+        else:
+            seen[m.group(1)] = path
+    return problems
+
+
+def check_no_secrets(paths, bodies: dict[str, str]) -> list[str]:
+    """Credential material never enters the KB — a tripwire on the write
+    boundary, not a scanner. Names are checked across every file under
+    knowledge/; bodies are scanned only in text-suffixed files (fences count —
+    a key in a code block is still committed). Spell placeholders `<redacted>`
+    or `<TOKEN>` — the gate cannot tell a fake from a leak."""
+    problems = []
+    for path in sorted(paths):
+        if SECRET_NAME.search(path.rsplit("/", 1)[-1]):
+            problems.append(
+                f"{path}: filename looks like credential material — secrets never "
+                "enter knowledge/; name their location instead"
+            )
+    for path in sorted(bodies):
+        if Path(path).suffix.lower() not in SECRET_SCAN_SUFFIXES:
+            continue
+        label = next((l for l, rx in SECRET_MARKERS if rx.search(bodies[path])), None)
+        if label:
+            problems.append(
+                f"{path}: contains a {label}-shaped value — redact it "
+                "(`<redacted>`), or record where the secret lives, never the secret"
+            )
+    return problems
+
+
+def check_script_refs(notes: dict[str, str], existing_scripts: set[str]) -> list[str]:
+    """`scripts/*.py` invocations must resolve — a dead pointer fails silently at
+    run time, not in review. Fenced examples do not count."""
+    problems = []
+    for path, content in notes.items():
+        refs = {m for line in prose_lines(content) for m in SCRIPT_REF.findall(line)}
+        for ref in sorted(refs - existing_scripts):
+            problems.append(
+                f"{path}: invokes `{ref}`, which does not exist — create it or "
+                "fix the reference"
+            )
+    return problems
+
+
 def check_local_links(notes: dict[str, str]) -> list[str]:
     """Check file/directory destinations in inline and reference Markdown links.
 
@@ -168,20 +316,7 @@ def check_local_links(notes: dict[str, str]) -> list[str]:
     inline = re.compile(r"\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^\s)\n]+)")
     reference = re.compile(r"^\s{0,3}\[[^\]\n]+\]:\s*(<[^>\n]+>|\S+)", re.MULTILINE)
     for path, content in notes.items():
-        prose = []
-        fence = None
-        for line in content.splitlines():
-            marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
-            if marker:
-                run = marker.group(1)
-                if fence is None:
-                    fence = run
-                elif run[0] == fence[0] and len(run) >= len(fence):
-                    fence = None
-                continue
-            if fence is None:
-                prose.append(re.sub(r"(`+).*?\1", "", line))
-        text = "\n".join(prose)
+        text = "\n".join(re.sub(r"(`+).*?\1", "", line) for line in prose_lines(content))
         for destination in dict.fromkeys(inline.findall(text) + reference.findall(text)):
             target = destination.strip("<>")
             try:
@@ -239,6 +374,30 @@ def validate_staged() -> list[str]:
     added = [p for status, p in pairs if status == "A" and is_current_md(p)]
     problems += check_born_valid(added, staged, overlay)
 
+    # Lessons appended by this commit must carry evidence. Entries are parsed
+    # from the staged post-image so continuation lines count even when the diff
+    # shows only the bullet.
+    if staged.get(LESSONS_FILE):
+        diff = git("diff", "--cached", "-U0", "--no-renames", "--", LESSONS_FILE)
+        added_bullets = {
+            ln[1:].strip() for ln in diff.splitlines()
+            if ln.startswith("+") and not ln.startswith("+++") and LESSON_ENTRY.match(ln[1:])
+        }
+        problems += check_lesson_evidence(staged[LESSONS_FILE], added_bullets)
+
+    # Notes must not invoke scripts that will not exist once this commit lands.
+    scripts = {p for p in git("ls-files", "-z", "--", "scripts").split("\0") if p.endswith(".py")}
+    problems += check_script_refs(overlay, scripts)
+
+    # Write-boundary tripwires check the post-commit tree, not just the commit's
+    # own files: a secret committed earlier is still a secret in the index.
+    problems += check_plan_numbers(raw_paths)
+    bodies = {
+        p: git("show", f":{p}") for p in sorted(raw_paths)
+        if Path(p).suffix.lower() in SECRET_SCAN_SUFFIXES
+    }
+    problems += check_no_secrets(raw_paths, bodies)
+
     problems += check_roots(overlay, raw_paths, added)
     return problems
 
@@ -248,12 +407,24 @@ def validate_all() -> list[str]:
         return ["knowledge/ is missing — initialize the knowledge base first"]
     raw_paths = {p.as_posix() for p in Path("knowledge").rglob("*") if p.is_file()}
     notes = {p: Path(p).read_text(encoding="utf-8") for p in sorted(raw_paths) if is_current_md(p)}
-    return (
+    scripts = {p.as_posix() for p in Path("scripts").rglob("*.py")}
+    bodies = {
+        p: Path(p).read_text(encoding="utf-8", errors="replace")
+        for p in sorted(raw_paths)
+        if Path(p).suffix.lower() in SECRET_SCAN_SUFFIXES
+    }
+    problems = (
         check_plan_status(notes)
+        + check_plan_numbers(raw_paths)
         + check_born_valid(list(notes), notes, notes, all_notes=True)
         + check_local_links(notes)
+        + check_no_secrets(raw_paths, bodies)
+        + check_script_refs(notes, scripts)
         + check_roots(notes, raw_paths, list(notes))
     )
+    if LESSONS_FILE in notes:
+        problems += check_lesson_evidence(notes[LESSONS_FILE])
+    return problems
 
 
 def main(argv=None):
